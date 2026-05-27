@@ -10,13 +10,13 @@ type JwtPayload = {
 };
 
 export function ensureAuthenticated(request: Request, _response: Response, next: NextFunction) {
-  const authorization = request.headers.authorization;
+  const authHeader = request.headers.authorization;
 
-  if (!authorization?.startsWith("Bearer ")) {
+  if (!authHeader?.startsWith("Bearer ")) {
     throw new AppError(401, "Token ausente");
   }
 
-  const token = authorization.replace("Bearer ", "");
+  const [_, token] = authHeader.split(" ");
 
   try {
     const payload = jwt.verify(token, env.JWT_SECRET) as JwtPayload;
@@ -30,7 +30,7 @@ export function ensureAuthenticated(request: Request, _response: Response, next:
   }
 }
 
-export function requireRole(...roles: UserRole[]) {
+export function authorize(...roles: UserRole[]) {
   return (request: Request, _response: Response, next: NextFunction) => {
     if (!request.user || !roles.includes(request.user.role)) {
       throw new AppError(403, "Acesso negado");

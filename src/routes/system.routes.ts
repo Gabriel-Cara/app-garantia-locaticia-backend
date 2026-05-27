@@ -2,7 +2,7 @@ import { Router } from "express";
 import { ensureAuthenticated } from "../middlewares/auth.js";
 import { oragoClient } from "../services/orago-client.js";
 
-export const systemRoutes = Router();
+const systemRoutes = Router();
 
 systemRoutes.use(ensureAuthenticated);
 
@@ -15,3 +15,5 @@ systemRoutes.get("/available-products", async (_request, response) => {
   const products = await oragoClient.availableProducts();
   return response.json({ products });
 });
+
+export { systemRoutes };

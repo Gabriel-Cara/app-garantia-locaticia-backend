@@ -2,11 +2,9 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import { adminRoutes } from "./routes/admin.routes.js";
-import { analysisRoutes } from "./routes/analysis.routes.js";
-import { authRoutes } from "./routes/auth.routes.js";
-import { systemRoutes } from "./routes/system.routes.js";
+
 import { errorHandler } from "./middlewares/error-handler.js";
+import { routes } from "./routes/index.routes.js";
 
 export const app = express();
 
@@ -19,9 +17,6 @@ app.get("/health", (_request, response) => {
   return response.json({ status: "ok" });
 });
 
-app.use("/auth", authRoutes);
-app.use("/analyses", analysisRoutes);
-app.use("/admin", adminRoutes);
-app.use("/system", systemRoutes);
+app.use(routes);
 
 app.use(errorHandler);
