@@ -9,6 +9,7 @@ const tenantController = new TenantController();
 
 tenantRoutes.use(ensureAuthenticated);
 
-tenantRoutes.post("/", authorize(UserRole.REAL_ESTATE), tenantController.consult);
+tenantRoutes.post("/cpf", authorize(UserRole.REAL_ESTATE), tenantController.consultByCpf);
+tenantRoutes.post("/cnpj", authorize(UserRole.REAL_ESTATE), tenantController.consultByCnpj);
 
 export { tenantRoutes };

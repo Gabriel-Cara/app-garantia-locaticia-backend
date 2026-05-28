@@ -9,6 +9,11 @@ export type CreatePfAnalysisInput = {
   products: Record<string, boolean>;
 };
 
+export type CreatePjAnalysisInput = {
+  cnpj: string;
+  products: Record<string, boolean>;
+};
+
 type OragoCreateAnalysisResponse = {
   status: number;
   error: boolean;
@@ -48,6 +53,13 @@ async function requestOrago<T>(path: string, init: RequestInit = {}) {
 export const oragoClient = {
   createPfAnalysis(input: CreatePfAnalysisInput) {
     return requestOrago<OragoCreateAnalysisResponse>("/api/v1/analysis/pf", {
+      method: "POST",
+      body: JSON.stringify(input)
+    });
+  },
+
+  createPjAnalysis(input: CreatePjAnalysisInput) {
+    return requestOrago<OragoCreateAnalysisResponse>("/api/v1/analysis/pj", {
       method: "POST",
       body: JSON.stringify(input)
     });
