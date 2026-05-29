@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
-import type { UserRole } from "../domain/roles.js";
+import { UserRole } from "../domain/roles.js";
 import { AppError } from "./error-handler.js";
 
 type JwtPayload = {

@@ -1,0 +1,189 @@
+// Libs
+import { Request, Response } from "express";
+import { prisma } from "../lib/prisma.js";
+
+// Errors
+import { AppError } from "../middlewares/error-handler.js";
+
+// Services
+import { RentalApplicationService } from "../services/rental-application.service.js";
+
+// Schemas
+import {
+  adminDecisionSchema,
+  contestRentalApplicationSchema,
+  createRentalApplicationByCnpjSchema,
+  createRentalApplicationByCpfSchema,
+  fillContractDataSchema,
+  listRentalApplicationsSchema,
+  rentalApplicationParamsSchema,
+} from "../schemas/rental-application.schemas.js";
+
+// Types
+import { UserRole } from "../domain/roles.js";
+
+const rentalApplicationService = new RentalApplicationService();
+
+export class RentalApplicationController {
+  async createByCpf(request: Request, response: Response) {
+    const input = createRentalApplicationByCpfSchema.parse(request.body);
+
+    const result = await rentalApplicationService.createByCpf({
+      requesterId: request.user!.id,
+      ...input,
+    });
+
+    return response.status(201).json(result);
+  }
+
+  async createByCnpj(request: Request, response: Response) {
+    const input = createRentalApplicationByCnpjSchema.parse(request.body);
+
+    const result = await rentalApplicationService.createByCnpj({
+      requesterId: request.user!.id,
+      ...input,
+    });
+
+    return response.status(201).json(result);
+  }
+
+  async list(request: Request, response: Response) {
+    const query = listRentalApplicationsSchema.parse(request.query);
+
+    const where =
+      request.user!.role === UserRole.ADMIN
+        ? {
+            requesterId: query.requesterId,
+            status: query.status,
+            document: query.document,
+          }
+        : {
+            requesterId: request.user!.id,
+            status: query.status,
+            document: query.document,
+          };
+
+    const [applications, total] = await Promise.all([
+      prisma.rentalApplication.findMany({
+        where,
+        skip: (query.page - 1) * query.perPage,
+        take: query.perPage,
+        orderBy: {
+          createdAt: "desc",
+        },
+        include: {
+          requester: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          },
+          contract: true,
+          contests: true,
+        },
+      }),
+      prisma.rentalApplication.count({ where }),
+    ]);
+
+    return response.json({
+      applications: applications.map((application) => ({
+        ...application,
+        decisionReasons: JSON.parse(application.decisionReasons),
+        decisionMetadata: application.decisionMetadata
+          ? JSON.parse(application.decisionMetadata)
+          : null,
+      })),
+      meta: {
+        page: query.page,
+        perPage: query.perPage,
+        total,
+        lastPage: Math.ceil(total / query.perPage),
+      },
+    });
+  }
+
+  async getById(request: Request, response: Response) {
+    const params = rentalApplicationParamsSchema.parse(request.params);
+
+    const application = await prisma.rentalApplication.findUnique({
+      where: {
+        id: params.id,
+      },
+      include: {
+        requester: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        contests: true,
+        contract: true,
+      },
+    });
+
+    if (!application) {
+      throw new AppError(404, "Consulta não encontrada");
+    }
+
+    if (
+      request.user!.role !== UserRole.ADMIN &&
+      application.requesterId !== request.user!.id
+    ) {
+      throw new AppError(403, "Acesso negado");
+    }
+
+    return response.json({
+      application: {
+        ...application,
+        decisionReasons: JSON.parse(application.decisionReasons),
+        decisionMetadata: application.decisionMetadata
+          ? JSON.parse(application.decisionMetadata)
+          : null,
+        oragoRawResponse: undefined,
+        oragoData: undefined,
+      },
+    });
+  }
+
+  async fillContractData(request: Request, response: Response) {
+    const params = rentalApplicationParamsSchema.parse(request.params);
+    const body = fillContractDataSchema.parse(request.body);
+
+    const application = await rentalApplicationService.fillContractData({
+      applicationId: params.id,
+      requesterId: request.user!.id,
+      data: body,
+    });
+
+    return response.json({ application });
+  }
+
+  async contest(request: Request, response: Response) {
+    const params = rentalApplicationParamsSchema.parse(request.params);
+    const body = contestRentalApplicationSchema.parse(request.body);
+
+    const contest = await rentalApplicationService.contest({
+      applicationId: params.id,
+      requesterId: request.user!.id,
+      reason: body.reason,
+    });
+
+    return response.status(201).json({ contest });
+  }
+
+  async adminDecide(request: Request, response: Response) {
+    const params = rentalApplicationParamsSchema.parse(request.params);
+    const body = adminDecisionSchema.parse(request.body);
+
+    const application = await rentalApplicationService.adminDecide({
+      applicationId: params.id,
+      adminId: request.user!.id,
+      decision: body.decision,
+      reason: body.reason,
+    });
+
+    return response.json({ application });
+  }
+}

@@ -15,11 +15,13 @@
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
+    "docxtemplater": "^3.68.7",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
+    "pizzip": "^3.2.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
@@ -29,6 +31,7 @@
     "@types/jsonwebtoken": "^9.0.7",
     "@types/morgan": "^1.9.9",
     "@types/node": "^22.10.2",
+    "@types/pizzip": "^3.0.5",
     "prisma": "^6.19.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

@@ -10,6 +10,7 @@ import { loginSchema, registerSchema } from "../schemas/auth.schemas.js";
 // Utils
 import { AppError } from "../middlewares/error-handler.js";
 import { env } from "../config/env.js";
+import { UserRole } from "../domain/roles.js";
 
 class AuthController {
   async register(request: Request, response: Response) {
@@ -25,22 +26,45 @@ class AuthController {
 
     const passwordHash = await bcrypt.hash(input.password, 10);
 
-    const user = await prisma.user.create({
-      data: {
-        name: input.name,
-        email: input.email,
-        passwordHash,
-        role: input.role,
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        createdAt: true,
-      },
-    });
+    const user = await prisma.$transaction(async (tx) => {
+      const createdUser = await tx.user.create({
+        data: {
+          name: input.name,
+          email: input.email,
+          passwordHash,
+          role: input.role
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          createdAt: true,
+        },
+      });
 
+      if (input.role === UserRole.REAL_ESTATE) {
+        await tx.userCreditWallet.create({
+          data: {
+            userId: createdUser.id,
+            availableCredits: 3,
+            isVip: false,
+          },
+        });
+
+        await tx.creditLedger.create({
+          data: {
+            userId: createdUser.id,
+            type: "INITIAL_GRANT",
+            amount: 3,
+            balanceAfter: 3,
+            reason: "Créditos gratuitos iniciais no cadastro",
+          },
+        });
+      }
+
+      return createdUser;
+    });
     return response.status(201).json({ user });
   }
 
