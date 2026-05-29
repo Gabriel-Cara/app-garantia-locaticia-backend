@@ -4,7 +4,7 @@ import { z } from "zod";
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().default(3333),
-  HOST: z.string().default("127.0.0.1"),
+  HOST: z.string().default("localhost"),
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(24, "JWT_SECRET deve ter ao menos 24 caracteres"),
   ORAGO_BASE_URL: z.string().url(),
