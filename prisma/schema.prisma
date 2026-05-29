@@ -7,29 +7,231 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id           String     @id @default(uuid())
-  name         String
-  email        String     @unique
-  passwordHash String
-  role         String
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  analyses     Analysis[]
+enum UserRole {
+  ADMIN
+  REAL_ESTATE
 }
 
-model Analysis {
-  id              String         @id @default(uuid())
-  oragoAnalysisId String         @unique
-  cpf             String
-  status          String         @default("CREATED")
-  products        String
-  result          String?
-  requesterId     String
-  requester       User           @relation(fields: [requesterId], references: [id])
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+enum DocumentType {
+  CPF
+  CNPJ
+}
+
+enum AutomaticDecisionStatus {
+  APPROVED
+  REJECTED
+  MANUAL_REVIEW
+}
+
+enum RecommendationStatus {
+  RECOMMENDED
+  NOT_RECOMMENDED
+  UNKNOWN
+}
+
+enum RentalApplicationStatus {
+  CONSULTED
+  WAITING_CONTRACT_DATA
+  WAITING_ADMIN_CONTRACT
+  CONTRACT_GENERATED
+  REJECTED
+  CONTESTED
+  ADMIN_REJECTED
+  CANCELLED
+}
+
+enum AdminDecision {
+  APPROVED
+  REJECTED
+}
+
+enum ContestStatus {
+  OPEN
+  ACCEPTED
+  REJECTED
+  CANCELLED
+}
+
+enum ContractStatus {
+  PENDING
+  GENERATED
+  FAILED
+}
+
+enum CreditLedgerType {
+  INITIAL_GRANT
+  ADMIN_SET
+  ADMIN_INCREMENT
+  ADMIN_DECREMENT
+  CONSULT_USED
+  VIP_ENABLED
+  VIP_DISABLED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         UserRole
+
+  wallet       UserCreditWallet?
+  applications RentalApplication[] @relation("RequesterApplications")
+
+  adminReviewedApplications RentalApplication[] @relation("AdminReviewedApplications")
+  generatedContracts        Contract[]          @relation("GeneratedContracts")
+  creditLedgerActions       CreditLedger[]      @relation("CreditLedgerActor")
+
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  creditLedgers             CreditLedger[]
+  rentalApplicationContests RentalApplicationContest[]
+
+  createdContests  RentalApplicationContest[] @relation("CreatedContests")
+  reviewedContests RentalApplicationContest[] @relation("ReviewedContests")
+}
+
+model UserCreditWallet {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  availableCredits Int     @default(3)
+  isVip            Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CreditLedger {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  actorId String?
+  actor   User?   @relation("CreditLedgerActor", fields: [actorId], references: [id])
+
+  type         CreditLedgerType
+  amount       Int
+  balanceAfter Int?
+
+  reason String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([actorId])
+}
+
+model RentalApplication {
+  id String @id @default(uuid())
+
+  documentType DocumentType
+  document     String
+
+  requesterId String
+  requester   User   @relation("RequesterApplications", fields: [requesterId], references: [id])
+
+  oragoAnalysisId  String? @unique
+  oragoRawResponse String?
+  oragoData        String?
+
+  products String?
+
+  rentValue        Decimal
+  condominiumValue Decimal
+  feesValue        Decimal
+  requestedExpense Decimal
+
+  automaticDecision AutomaticDecisionStatus
+  recommendation    RecommendationStatus
+
+  housingExpenseMin Decimal?
+  housingExpenseMax Decimal?
+
+  decisionReasons  String
+  decisionMetadata String?
+
+  status RentalApplicationStatus @default(CONSULTED)
+
+  tenantName     String?
+  tenantDocument String?
+  tenantEmail    String?
+  tenantPhone    String?
+
+  propertyZipCode      String?
+  propertyStreet       String?
+  propertyNumber       String?
+  propertyComplement   String?
+  propertyNeighborhood String?
+  propertyCity         String?
+  propertyState        String?
+
+  adminDecision       AdminDecision?
+  adminDecisionById   String?
+  adminDecisionBy     User?          @relation("AdminReviewedApplications", fields: [adminDecisionById], references: [id])
+  adminDecisionAt     DateTime?
+  adminDecisionReason String?
+
+  contests RentalApplicationContest[]
+  contract Contract?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([requesterId])
-  @@index([cpf])
+  @@index([document])
+  @@index([status])
+  @@index([automaticDecision])
+}
+
+model RentalApplicationContest {
+  id String @id @default(uuid())
+
+  applicationId String
+  application   RentalApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  createdById String
+  createdBy   User   @relation("CreatedContests", fields: [createdById], references: [id])
+
+  reason String
+
+  reviewedById String?
+  reviewedBy   User?   @relation("ReviewedContests", fields: [reviewedById], references: [id])
+
+  reviewedAt DateTime?
+  adminNote  String?
+
+  status ContestStatus @default(OPEN)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User?    @relation(fields: [userId], references: [id])
+  userId    String?
+
+  @@index([applicationId])
+  @@index([createdById])
+  @@index([status])
+}
+
+model Contract {
+  id String @id @default(uuid())
+
+  applicationId String            @unique
+  application   RentalApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  status ContractStatus @default(PENDING)
+
+  templateName String
+  filePath     String?
+  fileName     String?
+
+  generatedById String?
+  generatedBy   User?   @relation("GeneratedContracts", fields: [generatedById], references: [id])
+
+  errorMessage String?
+
+  generatedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }

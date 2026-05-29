@@ -1,6 +1,9 @@
-export type DecisionStatus = "approved" | "rejected" | "manual_review";
+export type TenantDecisionStatus = "approved" | "rejected" | "manual_review";
 
-export type RecommendationStatus = "recommended" | "not_recommended" | "unknown";
+export type TenantRecommendationStatus =
+  | "recommended"
+  | "not_recommended"
+  | "unknown";
 
 export interface HousingExpenseRange {
   min: number | null;
@@ -15,9 +18,11 @@ export interface TenantDecisionInput {
 }
 
 export interface TenantDecisionResult {
-  status: DecisionStatus;
-  recommendation: RecommendationStatus;
+  status: TenantDecisionStatus;
+  recommendation: TenantRecommendationStatus;
   requestedExpense: number;
   housingExpense: HousingExpenseRange;
   reasons: string[];
+  metadata?: Record<string, unknown>;
 }
+

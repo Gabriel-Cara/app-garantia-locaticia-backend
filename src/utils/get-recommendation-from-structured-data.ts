@@ -1,8 +1,10 @@
 // Schemas
-import { RecommendationStatus } from "../schemas/consults.schemas.js";
+import { TenantRecommendationStatus } from "../schemas/consults.schemas.js";
+import { parseNumber } from "./parse-number.js";
+import { parsePercentage } from "./parse-percentage.js";
 
 export function getRecommendationFromStructuredData(oragoData: any): {
-  recommendation: RecommendationStatus;
+  recommendation: TenantRecommendationStatus;
   reasons: string[];
 } {
   const reasons: string[] = [];
@@ -24,15 +26,15 @@ export function getRecommendationFromStructuredData(oragoData: any): {
     reasons.push("Possui processos judiciais alertáveis");
   }
 
-  const creditScore = Number(financial?.credit_score ?? financial?.score);
+  const creditScore = parseNumber(financial?.credit_score ?? financial?.score);
 
-  if (!Number.isNaN(creditScore) && creditScore < 499) {
+  if (creditScore !== null && creditScore < 499) {
     reasons.push(`Score de crédito baixo: ${creditScore}`);
   }
 
-  const defaultProbability = Number(financial?.default_prob);
+  const defaultProbability = parsePercentage(financial?.default_prob);
 
-  if (!Number.isNaN(defaultProbability) && defaultProbability > 20) {
+  if (defaultProbability !== null && defaultProbability > 20) {
     reasons.push(`Probabilidade de inadimplência alta: ${defaultProbability}%`);
   }
 
