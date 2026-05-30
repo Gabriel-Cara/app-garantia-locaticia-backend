@@ -12,9 +12,21 @@ import { AppError } from "../middlewares/error-handler.js";
 import { env } from "../config/env.js";
 import { UserRole } from "../domain/roles.js";
 
+const realEstateProfileSelect = {
+  id: true,
+  name: true,
+  cnpj: true,
+  phone: true,
+  responsibleName: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
+
 class AuthController {
   async register(request: Request, response: Response) {
     const input = registerSchema.parse(request.body);
+    const isRealEstate = input.role === UserRole.REAL_ESTATE;
+    const realEstateProfile = input.realEstateProfile;
 
     const emailAlreadyUsed = await prisma.user.findUnique({
       where: { email: input.email },
@@ -24,15 +36,37 @@ class AuthController {
       throw new AppError(409, "Email já cadastrado");
     }
 
+    if (realEstateProfile?.cnpj) {
+      const cnpjAlreadyUsed = await prisma.realEstateProfile.findUnique({
+        where: { cnpj: realEstateProfile.cnpj },
+      });
+
+      if (cnpjAlreadyUsed) {
+        throw new AppError(409, "CNPJ já cadastrado");
+      }
+    }
+
     const passwordHash = await bcrypt.hash(input.password, 10);
 
     const user = await prisma.$transaction(async (tx) => {
       const createdUser = await tx.user.create({
         data: {
-          name: input.name,
+          name: isRealEstate ? realEstateProfile!.responsibleName : input.name!,
           email: input.email,
           passwordHash,
-          role: input.role
+          role: input.role,
+          ...(isRealEstate && realEstateProfile
+            ? {
+                realEstateProfile: {
+                  create: {
+                    name: realEstateProfile.name,
+                    cnpj: realEstateProfile.cnpj,
+                    phone: realEstateProfile.phone,
+                    responsibleName: realEstateProfile.responsibleName,
+                  },
+                },
+              }
+            : {}),
         },
         select: {
           id: true,
@@ -40,10 +74,13 @@ class AuthController {
           email: true,
           role: true,
           createdAt: true,
+          realEstateProfile: {
+            select: realEstateProfileSelect,
+          },
         },
       });
 
-      if (input.role === UserRole.REAL_ESTATE) {
+      if (isRealEstate) {
         await tx.userCreditWallet.create({
           data: {
             userId: createdUser.id,
@@ -73,6 +110,16 @@ class AuthController {
 
     const user = await prisma.user.findUnique({
       where: { email: input.email },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        passwordHash: true,
+        role: true,
+        realEstateProfile: {
+          select: realEstateProfileSelect,
+        },
+      },
     });
 
     if (!user) {
@@ -100,6 +147,7 @@ class AuthController {
         name: user.name,
         email: user.email,
         role: user.role,
+        realEstateProfile: user.realEstateProfile,
       },
     });
   }

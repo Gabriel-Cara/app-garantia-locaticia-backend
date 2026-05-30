@@ -260,12 +260,19 @@ POST /auth/register
 
 ```json
 {
-  "name": "Imobiliária Teste",
   "email": "imobiliaria@teste.com",
   "password": "12345678",
-  "role": "REAL_ESTATE"
+  "role": "REAL_ESTATE",
+  "realEstateProfile": {
+    "name": "Imobiliária Teste",
+    "cnpj": "00643404000101",
+    "phone": "11999999999",
+    "responsibleName": "Maria Silva"
+  }
 }
 ```
+
+Para usuários `REAL_ESTATE`, o campo `cnpj` é opcional. O `name` do usuário é preenchido com `responsibleName`; o nome da imobiliária fica em `realEstateProfile.name`.
 
 ### Response
 
@@ -273,10 +280,19 @@ POST /auth/register
 {
   "user": {
     "id": "uuid",
-    "name": "Imobiliária Teste",
+    "name": "Maria Silva",
     "email": "imobiliaria@teste.com",
     "role": "REAL_ESTATE",
-    "createdAt": "2026-01-01T00:00:00.000Z"
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "realEstateProfile": {
+      "id": "uuid",
+      "name": "Imobiliária Teste",
+      "cnpj": "00643404000101",
+      "phone": "11999999999",
+      "responsibleName": "Maria Silva",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    }
   }
 }
 ```
@@ -307,9 +323,18 @@ POST /auth/login
   "token": "jwt-token",
   "user": {
     "id": "uuid",
-    "name": "Imobiliária Teste",
+    "name": "Maria Silva",
     "email": "imobiliaria@teste.com",
-    "role": "REAL_ESTATE"
+    "role": "REAL_ESTATE",
+    "realEstateProfile": {
+      "id": "uuid",
+      "name": "Imobiliária Teste",
+      "cnpj": "00643404000101",
+      "phone": "11999999999",
+      "responsibleName": "Maria Silva",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    }
   }
 }
 ```
@@ -529,8 +554,15 @@ GET /rental-applications?status=WAITING_ADMIN_CONTRACT&page=1&perPage=25
       "decisionMetadata": null,
       "requester": {
         "id": "uuid",
-        "name": "Imobiliária Teste",
-        "email": "imobiliaria@teste.com"
+        "name": "Maria Silva",
+        "email": "imobiliaria@teste.com",
+        "realEstateProfile": {
+          "id": "uuid",
+          "name": "Imobiliária Teste",
+          "cnpj": "00643404000101",
+          "phone": "11999999999",
+          "responsibleName": "Maria Silva"
+        }
       },
       "contract": null,
       "contests": []
@@ -1059,6 +1091,9 @@ O arquivo deve conter placeholders compatíveis com `docxtemplater`.
 
 {realEstateName}
 {realEstateEmail}
+{realEstateCnpj}
+{realEstatePhone}
+{realEstateResponsibleName}
 
 {generatedAt}
 ```
@@ -1087,6 +1122,9 @@ O arquivo deve conter placeholders compatíveis com `docxtemplater`.
 | `{monthlyServiceFee}`    | Taxa de serviço mensal calculada          |
 | `{realEstateName}`       | Nome da imobiliária                       |
 | `{realEstateEmail}`      | E-mail da imobiliária                     |
+| `{realEstateCnpj}`       | CNPJ da imobiliária                       |
+| `{realEstatePhone}`      | Telefone da imobiliária                   |
+| `{realEstateResponsibleName}` | Nome do responsável da imobiliária   |
 | `{generatedAt}`          | Data de geração do contrato               |
 
 ---

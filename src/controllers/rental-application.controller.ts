@@ -77,6 +77,15 @@ export class RentalApplicationController {
               id: true,
               name: true,
               email: true,
+              realEstateProfile: {
+                select: {
+                  id: true,
+                  name: true,
+                  cnpj: true,
+                  phone: true,
+                  responsibleName: true,
+                },
+              },
             },
           },
           contract: true,
@@ -116,6 +125,15 @@ export class RentalApplicationController {
             id: true,
             name: true,
             email: true,
+            realEstateProfile: {
+              select: {
+                id: true,
+                name: true,
+                cnpj: true,
+                phone: true,
+                responsibleName: true,
+              },
+            },
           },
         },
         contests: true,

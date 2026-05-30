@@ -75,6 +75,8 @@ model User {
   passwordHash String
   role         UserRole
 
+  realEstateProfile RealEstateProfile?
+
   wallet       UserCreditWallet?
   applications RentalApplication[] @relation("RequesterApplications")
 
@@ -89,6 +91,20 @@ model User {
 
   createdContests  RentalApplicationContest[] @relation("CreatedContests")
   reviewedContests RentalApplicationContest[] @relation("ReviewedContests")
+}
+
+model RealEstateProfile {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name            String
+  cnpj            String? @unique
+  phone           String
+  responsibleName String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model UserCreditWallet {

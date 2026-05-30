@@ -62,7 +62,11 @@ export class ContractService {
       },
       include: {
         contract: true,
-        requester: true,
+        requester: {
+          include: {
+            realEstateProfile: true,
+          },
+        },
       },
     });
 
@@ -102,6 +106,7 @@ export class ContractService {
     const packageValue = toNumber(application.requestedExpense);
     const feeValue = toNumber(application.feesValue);
     const monthlyServiceFee = packageValue * 0.1;
+    const realEstateProfile = application.requester.realEstateProfile;
 
     try {
       doc.render({
@@ -127,8 +132,12 @@ export class ContractService {
         feeValue: formatCurrency(feeValue),
         monthlyServiceFee: formatCurrency(monthlyServiceFee),
 
-        realEstateName: application.requester.name,
+        realEstateName: realEstateProfile?.name ?? application.requester.name,
         realEstateEmail: application.requester.email,
+        realEstateCnpj: realEstateProfile?.cnpj ?? "",
+        realEstatePhone: realEstateProfile?.phone ?? "",
+        realEstateResponsibleName:
+          realEstateProfile?.responsibleName ?? application.requester.name,
 
         generatedAt: new Intl.DateTimeFormat("pt-BR").format(new Date()),
       });
