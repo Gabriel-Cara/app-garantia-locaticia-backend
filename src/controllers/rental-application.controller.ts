@@ -22,7 +22,20 @@ import {
 // Types
 import { UserRole } from "../domain/roles.js";
 
+// Utils
+import { extractApplicantName } from "../utils/extract-applicant-name.js";
+
 const rentalApplicationService = new RentalApplicationService();
+
+function parseJsonSafe(value?: string | null) {
+  if (!value) return null;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
 
 export class RentalApplicationController {
   async createByCpf(request: Request, response: Response) {
@@ -152,9 +165,19 @@ export class RentalApplicationController {
       throw new AppError(403, "Acesso negado");
     }
 
+    const parsedOragoData = parseJsonSafe(application.oragoData);
+
+    const tenantName =
+      application.tenantName ??
+      extractApplicantName(application.documentType, parsedOragoData);
+
+    const tenantDocument = application.tenantDocument ?? application.document;
+
     return response.json({
       application: {
         ...application,
+        tenantName,
+        tenantDocument,
         decisionReasons: JSON.parse(application.decisionReasons),
         decisionMetadata: application.decisionMetadata
           ? JSON.parse(application.decisionMetadata)
