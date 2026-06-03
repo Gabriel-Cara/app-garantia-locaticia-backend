@@ -9,6 +9,7 @@ import { CreditService } from "./credit.service.js";
 import { oragoClient } from "./orago-client.js";
 
 // Utils
+import { extractApplicantName } from "../utils/extract-applicant-name.js";
 import { evaluateTenant } from "../utils/evaluate-tenant.js";
 
 const creditService = new CreditService();
@@ -109,7 +110,32 @@ export class RentalApplicationService {
     });
   }
 
+  private async assertDocumentWasNotConsulted(document: string) {
+    const existingApplication = await prisma.rentalApplication.findUnique({
+      where: {
+        document,
+      },
+      select: {
+        id: true,
+        document: true,
+        documentType: true,
+        createdAt: true,
+        status: true,
+      },
+    });
+
+    if (existingApplication) {
+      throw new AppError(
+        409,
+        "Este CPF/CNPJ já possui uma consulta cadastrada. Não é permitido consultar o mesmo documento novamente.",
+        "DOCUMENT_ALREADY_CONSULTED",
+      );
+    }
+  }
+
   async createByCpf(input: CreateByCpfInput) {
+    await this.assertDocumentWasNotConsulted(input.cpf);
+
     await creditService.ensureCanConsult(input.requesterId);
 
     const oragoCreateResponse = await oragoClient.createPfAnalysis({
@@ -152,6 +178,8 @@ export class RentalApplicationService {
       },
     });
 
+    const tenantName = extractApplicantName("CPF", collectResponse.data);
+
     const automaticDecision = mapDecisionStatus(decision.status);
     const recommendation = mapRecommendationStatus(decision.recommendation);
     const workflowStatus = getInitialWorkflowStatus(automaticDecision);
@@ -162,6 +190,9 @@ export class RentalApplicationService {
         documentType: "CPF",
         document: input.cpf,
         requesterId: input.requesterId,
+
+        tenantName,
+        tenantDocument: input.cpf,
 
         oragoAnalysisId: oragoCreateResponse.analysis_id,
         oragoRawResponse: JSON.stringify(collectResponse),
@@ -194,6 +225,8 @@ export class RentalApplicationService {
   }
 
   async createByCnpj(input: CreateByCnpjInput) {
+    await this.assertDocumentWasNotConsulted(input.cnpj);
+
     await creditService.ensureCanConsult(input.requesterId);
 
     const oragoCreateResponse = await oragoClient.createPjAnalysis({
@@ -223,6 +256,8 @@ export class RentalApplicationService {
       },
     });
 
+    const tenantName = extractApplicantName("CNPJ", collectResponse.data);
+
     const automaticDecision = mapDecisionStatus(decision.status);
     const recommendation = mapRecommendationStatus(decision.recommendation);
     const workflowStatus = getInitialWorkflowStatus(automaticDecision);
@@ -245,6 +280,9 @@ export class RentalApplicationService {
           documentType: "CNPJ",
           document: input.cnpj,
           requesterId: input.requesterId,
+
+          tenantName,
+          tenantDocument: input.cnpj,
 
           oragoAnalysisId: oragoCreateResponse.analysis_id,
           oragoRawResponse: JSON.stringify(collectResponse),
@@ -336,6 +374,16 @@ export class RentalApplicationService {
 
     if (application.requesterId !== params.requesterId) {
       throw new AppError(403, "Acesso negado");
+    }
+
+    const tenantDocument = params.data.tenantDocument.replace(/\D/g, "");
+
+    if (tenantDocument !== application.document) {
+      throw new AppError(
+        400,
+        "O documento do locatário deve ser o mesmo utilizado na consulta.",
+        "TENANT_DOCUMENT_MISMATCH",
+      );
     }
 
     const canFillContractData = application.status === "WAITING_CONTRACT_DATA";
