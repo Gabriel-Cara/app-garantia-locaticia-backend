@@ -34,49 +34,61 @@ export class ContractController {
   }
 
   async download(request: Request, response: Response) {
-    const params = contractParamsSchema.parse(request.params);
+  const params = contractParamsSchema.parse(request.params);
 
-    const contract = await prisma.contract.findUnique({
-      where: {
-        id: params.id,
-      },
-      include: {
-        application: true,
-      },
-    });
+  const contract = await prisma.contract.findUnique({
+    where: {
+      id: params.id,
+    },
+    include: {
+      application: true,
+    },
+  });
 
-    if (!contract) {
-      throw new AppError(404, "Contrato não encontrado");
-    }
+  if (!contract) {
+    throw new AppError(404, "Contrato não encontrado");
+  }
 
-    const isAdmin = request.user!.role === "ADMIN";
-    const isOwner = contract.application.requesterId === request.user!.id;
+  const isAdmin = request.user!.role === "ADMIN";
+  const isOwner = contract.application.requesterId === request.user!.id;
 
-    if (!isAdmin && !isOwner) {
-      throw new AppError(403, "Acesso negado");
-    }
+  if (!isAdmin && !isOwner) {
+    throw new AppError(403, "Acesso negado");
+  }
 
-    if (contract.storageDriver === "r2" || contract.storageDriver === "s3") {
-      if (!contract.storageKey) {
-        throw new AppError(404, "Arquivo do contrato não encontrado");
-      }
+  const fileName = contract.fileName ?? "contrato-doculoc.docx";
 
-      const url = await storageService.getSignedDownloadUrl({
-        key: contract.storageKey,
-        fileName: contract.fileName,
-        expiresInSeconds: 300,
-      });
-
-      return response.json({ url });
-    }
-
-    if (!contract.filePath) {
+  if (contract.storageDriver === "r2" || contract.storageDriver === "s3") {
+    if (!contract.storageKey) {
       throw new AppError(404, "Arquivo do contrato não encontrado");
     }
 
-    return response.download(
-      contract.filePath,
-      contract.fileName ?? "contrato.docx",
+    const file = await storageService.getObjectStream({
+      key: contract.storageKey,
+    });
+
+    response.setHeader(
+      "Content-Type",
+      file.contentType ??
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     );
+
+    response.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+    );
+
+    if (file.contentLength) {
+      response.setHeader("Content-Length", String(file.contentLength));
+    }
+
+    return file.stream.pipe(response);
   }
+
+  if (!contract.filePath) {
+    throw new AppError(404, "Arquivo do contrato não encontrado");
+  }
+
+  return response.download(contract.filePath, fileName);
+}
 }
