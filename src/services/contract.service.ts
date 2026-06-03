@@ -11,6 +11,11 @@ import { AppError } from "../middlewares/error-handler.js";
 // Types
 import { env } from "../config/env.js";
 
+// Services
+import { StorageService } from "./storage.service.js";
+
+const storageService = new StorageService();
+
 function toNumber(value: unknown) {
   if (value === null || value === undefined) {
     return 0;
@@ -85,9 +90,11 @@ export class ContractService {
       throw new AppError(500, "Template de contrato não encontrado");
     }
 
-    fs.mkdirSync(env.CONTRACT_OUTPUT_DIR, {
-      recursive: true,
-    });
+    if (env.STORAGE_DRIVER === "local") {
+      fs.mkdirSync(env.CONTRACT_OUTPUT_DIR, {
+        recursive: true,
+      });
+    }
 
     const templateBinary = fs.readFileSync(
       env.CONTRACT_TEMPLATE_PATH,
@@ -102,7 +109,6 @@ export class ContractService {
     });
 
     const packageValue = toNumber(application.requestedExpense);
-    const feeValue = toNumber(application.feesValue);
     const monthlyServiceFee = packageValue * 0.1;
     const realEstateProfile = application.requester.realEstateProfile;
 
@@ -169,10 +175,15 @@ export class ContractService {
     });
 
     const fileName = `contrato-${application.id}.docx`;
-    const outputDir = path.resolve(env.CONTRACT_OUTPUT_DIR);
-    const filePath = path.join(outputDir, fileName);
+    const storageKey = `contracts/${new Date().getFullYear()}/${application.id}/${fileName}`;
 
-    fs.writeFileSync(filePath, buffer);
+    const uploadedFile = await storageService.upload({
+      buffer,
+      key: storageKey,
+      fileName,
+      mimeType:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
 
     const contract = await prisma.$transaction(async (tx) => {
       const updatedContract = await tx.contract.upsert({
@@ -183,15 +194,29 @@ export class ContractService {
           applicationId: application.id,
           status: "GENERATED",
           templateName: path.basename(env.CONTRACT_TEMPLATE_PATH),
-          filePath,
-          fileName,
+
+          filePath: uploadedFile.filePath,
+          fileName: uploadedFile.fileName,
+          mimeType: uploadedFile.mimeType,
+          sizeBytes: uploadedFile.sizeBytes,
+          storageDriver: uploadedFile.storageDriver,
+          storageBucket: uploadedFile.storageBucket,
+          storageKey: uploadedFile.storageKey,
+
           generatedById: params.adminId,
           generatedAt: new Date(),
         },
         update: {
           status: "GENERATED",
-          filePath,
-          fileName,
+
+          filePath: uploadedFile.filePath,
+          fileName: uploadedFile.fileName,
+          mimeType: uploadedFile.mimeType,
+          sizeBytes: uploadedFile.sizeBytes,
+          storageDriver: uploadedFile.storageDriver,
+          storageBucket: uploadedFile.storageBucket,
+          storageKey: uploadedFile.storageKey,
+
           generatedById: params.adminId,
           generatedAt: new Date(),
           errorMessage: null,

@@ -18,7 +18,7 @@ contractRoutes.post(
 contractRoutes.get(
   "/:id/download",
   authorize(UserRole.ADMIN, UserRole.REAL_ESTATE),
-  contractController.download,
+  asyncHandler(contractController.download),
 );
 
 export { contractRoutes };

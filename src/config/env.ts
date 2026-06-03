@@ -9,8 +9,39 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(24, "JWT_SECRET deve ter ao menos 24 caracteres"),
   ORAGO_BASE_URL: z.string().url(),
   ORAGO_API_TOKEN: z.string().min(1),
-  CONTRACT_TEMPLATE_PATH: z.string().default("src/templates/default-rental-contract.docx"),
+
+  CONTRACT_TEMPLATE_PATH: z
+    .string()
+    .default("src/templates/default-rental-contract.docx"),
+
   CONTRACT_OUTPUT_DIR: z.string().default("storage/contracts"),
+
+  STORAGE_DRIVER: z.enum(["local", "r2", "s3"]).default("local"),
+
+  S3_ENDPOINT: z.string().optional(),
+  S3_REGION: z.string().default("auto"),
+  S3_BUCKET: z.string().optional(),
+  S3_ACCESS_KEY_ID: z.string().optional(),
+  S3_SECRET_ACCESS_KEY: z.string().optional(),
+
+  CORS_ORIGIN: z.string().optional(),
 });
 
-export const env = envSchema.parse(process.env);
+const parsedEnv = envSchema.parse(process.env);
+
+if (parsedEnv.STORAGE_DRIVER !== "local") {
+  const requiredKeys = [
+    "S3_ENDPOINT",
+    "S3_BUCKET",
+    "S3_ACCESS_KEY_ID",
+    "S3_SECRET_ACCESS_KEY",
+  ] as const;
+
+  for (const key of requiredKeys) {
+    if (!parsedEnv[key]) {
+      throw new Error(`${key} é obrigatório quando STORAGE_DRIVER=${parsedEnv.STORAGE_DRIVER}`);
+    }
+  }
+}
+
+export const env = parsedEnv;

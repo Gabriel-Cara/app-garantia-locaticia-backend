@@ -14,7 +14,9 @@
     "prisma:reset": "prisma migrate reset"
   },
   "dependencies": {
-    "@prisma/client": "^6.19.3",
+    "@aws-sdk/client-s3": "^3.1061.0",
+    "@aws-sdk/s3-request-presigner": "^3.1061.0",
+    "@prisma/client": "^6.8.2",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "docxtemplater": "^3.68.7",
@@ -34,7 +36,7 @@
     "@types/morgan": "^1.9.9",
     "@types/node": "^22.10.2",
     "@types/pizzip": "^3.0.5",
-    "prisma": "^6.19.3",
+    "prisma": "^6.8.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

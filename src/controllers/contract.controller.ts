@@ -5,11 +5,13 @@ import { z } from "zod";
 
 // Services
 import { ContractService } from "../services/contract.service.js";
+import { StorageService } from "../services/storage.service.js";
 
 // Errors
 import { AppError } from "../middlewares/error-handler.js";
 
 const contractService = new ContractService();
+const storageService = new StorageService();
 
 const applicationParamsSchema = z.object({
   applicationId: z.string().uuid(),
@@ -43,7 +45,7 @@ export class ContractController {
       },
     });
 
-    if (!contract || !contract.filePath) {
+    if (!contract) {
       throw new AppError(404, "Contrato não encontrado");
     }
 
@@ -54,6 +56,27 @@ export class ContractController {
       throw new AppError(403, "Acesso negado");
     }
 
-    return response.download(contract.filePath, contract.fileName ?? "contrato.docx");
+    if (contract.storageDriver === "r2" || contract.storageDriver === "s3") {
+      if (!contract.storageKey) {
+        throw new AppError(404, "Arquivo do contrato não encontrado");
+      }
+
+      const url = await storageService.getSignedDownloadUrl({
+        key: contract.storageKey,
+        fileName: contract.fileName,
+        expiresInSeconds: 300,
+      });
+
+      return response.json({ url });
+    }
+
+    if (!contract.filePath) {
+      throw new AppError(404, "Arquivo do contrato não encontrado");
+    }
+
+    return response.download(
+      contract.filePath,
+      contract.fileName ?? "contrato.docx",
+    );
   }
 }

@@ -238,8 +238,16 @@ model Contract {
   status ContractStatus @default(PENDING)
 
   templateName String
-  filePath     String?
-  fileName     String?
+
+  filePath String?
+  fileName String?
+
+  mimeType  String?
+  sizeBytes Int?
+
+  storageDriver String?
+  storageBucket String?
+  storageKey    String?
 
   generatedById String?
   generatedBy   User?   @relation("GeneratedContracts", fields: [generatedById], references: [id])
