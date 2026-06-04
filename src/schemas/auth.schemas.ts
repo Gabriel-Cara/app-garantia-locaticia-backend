@@ -52,3 +52,16 @@ export const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
 });
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().email(),
+});
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(32),
+  password: z.string().min(8),
+  passwordConfirmation: z.string().min(8),
+}).refine((data) => data.password === data.passwordConfirmation, {
+  path: ["passwordConfirmation"],
+  message: "As senhas não conferem",
+});

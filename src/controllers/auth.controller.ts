@@ -5,12 +5,21 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 
 // Schemas
-import { loginSchema, registerSchema } from "../schemas/auth.schemas.js";
+import {
+  loginSchema,
+  registerSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
+} from "../schemas/auth.schemas.js";
 
 // Utils
 import { AppError } from "../middlewares/error-handler.js";
 import { env } from "../config/env.js";
 import { UserRole } from "../domain/roles.js";
+import { mailService } from "../services/mail.service.js";
+import { randomBytes } from "crypto";
+import { buildPasswordResetEmail } from "../utils/build-password-reset-email.js";
+import { hashToken } from "../utils/hash-token.js";
 
 const realEstateProfileSelect = {
   id: true,
@@ -24,7 +33,9 @@ const realEstateProfileSelect = {
 
 class AuthController {
   async register(request: Request, response: Response) {
-    const { name, email, role, password, ...rest } = registerSchema.parse(request.body);
+    const { name, email, role, password, ...rest } = registerSchema.parse(
+      request.body,
+    );
     const isRealEstate = role === UserRole.REAL_ESTATE;
     const realEstateProfile = rest.realEstateProfile;
 
@@ -150,6 +161,98 @@ class AuthController {
         realEstateProfile: user.realEstateProfile,
       },
     });
+  }
+
+  async forgotPassword(request: Request, response: Response) {
+    const { email } = forgotPasswordSchema.parse(request.body);
+
+    const user = await prisma.user.findUnique({
+      where: { email: email },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+      },
+    });
+
+    const successResponse = {
+      message: "Se um usuário com esse email existir, um link para resetar a senha será enviado.",
+    }
+
+    if (!user) {
+      // Para evitar vazamento de informações, retornamos a mesma resposta mesmo que o usuário não exista
+      return response.json(successResponse);
+    }
+
+    const token = randomBytes(32).toString("hex");
+    const tokenHash = hashToken(token);
+    const expiresAt = new Date(Date.now() + env.PASSWORD_RESET_TOKEN_EXPIRES_MINUTES * 60 * 1000);
+
+    await prisma.$transaction( async (tx) => {
+      await tx.passwordResetToken.updateMany({
+        where: {
+          userId: user.id,
+          usedAt: null
+        },
+        data: {
+          usedAt: new Date()
+        }
+      });
+
+      await tx.passwordResetToken.create({
+        data: {
+          userId: user.id,
+          tokenHash,
+          expiresAt,
+        }
+      });
+    });
+
+    const resetUrl = `${env.APP_URL.replace(/\/$/, "")}/reset-password?token=${token}`;
+
+    await mailService.send({
+      to: user.email,
+      subject: "Redefinição de senha - Doculoc",
+      html: buildPasswordResetEmail(user.name, resetUrl)
+    });
+
+    return response.json(successResponse);
+  }
+
+  async resetPassword(request: Request, response: Response) {
+    const { token, password } = resetPasswordSchema.parse(request.body);
+    const tokenHash = hashToken(token);
+
+    const passwordResetToken = await prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+      include: {
+        user: {
+          select: {
+            id: true,
+          },
+        },
+      },
+    });
+
+    if (!passwordResetToken || passwordResetToken.usedAt || passwordResetToken.expiresAt < new Date()) {
+      throw new AppError(400, "Link de recuperação inválido ou expirado");
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    await prisma.$transaction( async (tx) => {
+      await tx.user.update({
+        where: { id: passwordResetToken.user.id },
+        data: { passwordHash },
+      });
+
+      await tx.passwordResetToken.update({
+        where: { id: passwordResetToken.id },
+        data: { usedAt: new Date() },
+      });
+    });
+
+    return response.json({ message: "Senha redefinida com sucesso" });
   }
 }
 

@@ -88,9 +88,25 @@ model User {
   updatedAt                 DateTime                   @updatedAt
   creditLedgers             CreditLedger[]
   rentalApplicationContests RentalApplicationContest[]
+  passwordResetTokens       PasswordResetToken[]
 
   createdContests  RentalApplicationContest[] @relation("CreatedContests")
   reviewedContests RentalApplicationContest[] @relation("ReviewedContests")
+}
+
+model PasswordResetToken {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model RealEstateProfile {

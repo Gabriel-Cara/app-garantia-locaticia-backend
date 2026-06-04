@@ -25,6 +25,11 @@ const envSchema = z.object({
   S3_SECRET_ACCESS_KEY: z.string().optional(),
 
   CORS_ORIGIN: z.string().optional(),
+
+  APP_URL: z.string().url().default("http://localhost:5173"),
+  RESEND_API_KEY: z.string().optional(),
+  MAIL_FROM: z.string().optional(),
+  PASSWORD_RESET_TOKEN_EXPIRES_MINUTES: z.coerce.number().int().positive().default(180),
 });
 
 const parsedEnv = envSchema.parse(process.env);

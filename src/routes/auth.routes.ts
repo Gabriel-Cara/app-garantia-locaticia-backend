@@ -12,4 +12,8 @@ authRoutes.post("/register", asyncHandler(authController.register));
 
 authRoutes.post("/login", asyncHandler(authController.login));
 
+authRoutes.post("/forgot-password", asyncHandler(authController.forgotPassword));
+
+authRoutes.post("/reset-password", asyncHandler(authController.resetPassword));
+
 export { authRoutes };
