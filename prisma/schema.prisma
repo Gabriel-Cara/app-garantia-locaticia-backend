@@ -176,6 +176,7 @@ model OragoConsultLock {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([document])
   @@index([requesterId])
   @@index([status])
 }
