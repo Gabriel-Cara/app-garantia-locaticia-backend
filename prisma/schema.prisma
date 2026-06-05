@@ -68,6 +68,12 @@ enum CreditLedgerType {
   VIP_DISABLED
 }
 
+enum OragoConsultStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 model User {
   id           String   @id @default(uuid())
   name         String
@@ -79,6 +85,8 @@ model User {
 
   wallet       UserCreditWallet?
   applications RentalApplication[] @relation("RequesterApplications")
+
+  oragoConsultLocks OragoConsultLock[]
 
   adminReviewedApplications RentalApplication[] @relation("AdminReviewedApplications")
   generatedContracts        Contract[]          @relation("GeneratedContracts")
@@ -153,6 +161,23 @@ model CreditLedger {
 
   @@index([userId])
   @@index([actorId])
+}
+
+model OragoConsultLock {
+  id              String             @id @default(uuid())
+  documentType    DocumentType
+  document        String
+  requesterId     String
+  requester       User               @relation(fields: [requesterId], references: [id], onDelete: Cascade)
+  oragoAnalysisId String?            @unique
+  status          OragoConsultStatus @default(PROCESSING)
+  errorMessage    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([requesterId])
+  @@index([status])
 }
 
 model RentalApplication {

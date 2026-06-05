@@ -51,6 +51,27 @@ function getInitialWorkflowStatus(decisionStatus: string) {
   return "CONSULTED";
 }
 
+async function collectOragoWithRetry(analysisId: string) {
+  const attempts = 6;
+  const delayMs = 3000;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const response = await oragoClient.collectAnalysis(analysisId);
+
+    if (response && !response.error && response.ready) {
+      return response;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  throw new AppError(
+    502,
+    "A análise foi criada na Órago, mas o resultado ainda não ficou disponível.",
+    "ORAGO_RESULT_NOT_READY",
+  );
+}
+
 export class RentalApplicationService {
   private async createApplicationAndConsumeCredit(params: {
     requesterId: string;
@@ -133,156 +154,120 @@ export class RentalApplicationService {
     }
   }
 
+  private async createConsultLock(params: {
+    requesterId: string;
+    document: string;
+    documentType: "CPF" | "CNPJ";
+  }) {
+    try {
+      return await prisma.oragoConsultLock.create({
+        data: {
+          requesterId: params.requesterId,
+          document: params.document,
+          documentType: params.documentType,
+          status: "PROCESSING",
+        },
+      });
+    } catch (error: any) {
+      if (error.code === "P2002") {
+        throw new AppError(
+          409,
+          "Este CPF/CNPJ já possui uma consulta em processamento.",
+          "DOCUMENT_CONSULT_IN_PROGRESS",
+        );
+      }
+
+      throw error;
+    }
+  }
+
   async createByCpf(input: CreateByCpfInput) {
     await this.assertDocumentWasNotConsulted(input.cpf);
 
     await creditService.ensureCanConsult(input.requesterId);
 
-    const oragoCreateResponse = await oragoClient.createPfAnalysis({
-      cpf: input.cpf,
-      email: input.email,
-      phone: input.phone,
-      selfie: input.selfie,
-      products: {
-        basic_data: true,
-        default_financial: true,
-        judicial: true,
-        ai: true,
-        antifraud: false,
-        antifraud_pix: false,
-        antifraud_quiz: false,
-        banking_history: false,
-        advanced_financial: false,
-        pre_visit: false,
-        pre_visit_judicial: false,
-        financial_open_finance: false,
-        biometrics_with_liveness: false,
-      },
-    });
-
-    const collectResponse = await oragoClient.collectAnalysis(
-      oragoCreateResponse.analysis_id,
-    );
-
-    if (!collectResponse || collectResponse.error || !collectResponse.ready) {
-      throw new AppError(502, "Erro ao coletar resultado da análise na Órago");
-    }
-
-    const decision = evaluateTenant({
-      documentType: "CPF",
-      oragoData: collectResponse.data,
-      input: {
-        rentValue: input.rentValue,
-        condominiumValue: input.condominiumValue,
-        feesValue: input.feesValue,
-      },
-    });
-
-    const tenantName = extractApplicantName("CPF", collectResponse.data);
-
-    const automaticDecision = mapDecisionStatus(decision.status);
-    const recommendation = mapRecommendationStatus(decision.recommendation);
-    const workflowStatus = getInitialWorkflowStatus(automaticDecision);
-
-    const application = await this.createApplicationAndConsumeCredit({
+    const lock = await this.createConsultLock({
       requesterId: input.requesterId,
-      data: {
-        documentType: "CPF",
-        document: input.cpf,
-        requesterId: input.requesterId,
-
-        tenantName,
-        tenantDocument: input.cpf,
-
-        oragoAnalysisId: oragoCreateResponse.analysis_id,
-        oragoRawResponse: JSON.stringify(collectResponse),
-        oragoData: JSON.stringify(collectResponse.data),
-
-        rentValue: input.rentValue,
-        condominiumValue: input.condominiumValue,
-        feesValue: input.feesValue,
-        requestedExpense: decision.requestedExpense,
-
-        automaticDecision,
-        recommendation,
-
-        housingExpenseMin: decision.housingExpense.min,
-        housingExpenseMax: decision.housingExpense.max,
-
-        decisionReasons: JSON.stringify(decision.reasons),
-        decisionMetadata: decision.metadata
-          ? JSON.stringify(decision.metadata)
-          : null,
-
-        status: workflowStatus,
-      },
+      document: input.cpf,
+      documentType: "CPF",
     });
 
-    return {
-      application,
-      decision,
-    };
-  }
-
-  async createByCnpj(input: CreateByCnpjInput) {
-    await this.assertDocumentWasNotConsulted(input.cnpj);
-
-    await creditService.ensureCanConsult(input.requesterId);
-
-    const oragoCreateResponse = await oragoClient.createPjAnalysis({
-      cnpj: input.cnpj,
-      products: {
-        company_analysis_judicial: true,
-        company_analysis_financial: true,
-        ai: true,
-      },
-    });
-
-    const collectResponse = await oragoClient.collectAnalysis(
-      oragoCreateResponse.analysis_id,
-    );
-
-    if (!collectResponse || collectResponse.error || !collectResponse.ready) {
-      throw new AppError(502, "Erro ao coletar resultado da análise na Órago");
-    }
-
-    const decision = evaluateTenant({
-      documentType: "CNPJ",
-      oragoData: collectResponse.data,
-      input: {
-        rentValue: input.rentValue,
-        condominiumValue: input.condominiumValue,
-        feesValue: input.feesValue,
-      },
-    });
-
-    const tenantName = extractApplicantName("CNPJ", collectResponse.data);
-
-    const automaticDecision = mapDecisionStatus(decision.status);
-    const recommendation = mapRecommendationStatus(decision.recommendation);
-    const workflowStatus = getInitialWorkflowStatus(automaticDecision);
-
-    const application = await prisma.$transaction(async (tx) => {
-      const wallet = await tx.userCreditWallet.findUnique({
-        where: { userId: input.requesterId },
+    try {
+      const oragoCreateResponse = await oragoClient.createPfAnalysis({
+        cpf: input.cpf,
+        email: input.email,
+        phone: input.phone,
+        selfie: input.selfie,
+        products: {
+          basic_data: true,
+          default_financial: true,
+          judicial: true,
+          ai: true,
+          antifraud: false,
+          antifraud_pix: false,
+          antifraud_quiz: false,
+          banking_history: false,
+          advanced_financial: false,
+          pre_visit: false,
+          pre_visit_judicial: false,
+          financial_open_finance: false,
+          biometrics_with_liveness: false,
+        },
       });
 
-      if (!wallet) {
-        throw new AppError(403, "Carteira de créditos não encontrada");
-      }
-
-      if (!wallet.isVip && wallet.availableCredits <= 0) {
-        throw new AppError(402, "Usuário sem consultas disponíveis");
-      }
-
-      const createdApplication = await tx.rentalApplication.create({
+      await prisma.oragoConsultLock.update({
+        where: {
+          id: lock.id,
+        },
         data: {
-          documentType: "CNPJ",
-          document: input.cnpj,
+          oragoAnalysisId: oragoCreateResponse.analysis_id,
+        },
+      });
+
+      const collectResponse = await collectOragoWithRetry(
+        oragoCreateResponse.analysis_id,
+      );
+
+      if (!collectResponse || collectResponse.error || !collectResponse.ready) {
+        await prisma.oragoConsultLock.update({
+          where: { id: lock.id },
+          data: {
+            status: "FAILED",
+            errorMessage: "Erro ao coletar resultado da análise na Órago",
+          },
+        });
+
+        throw new AppError(
+          502,
+          "Erro ao coletar resultado da análise na Órago",
+        );
+      }
+
+      const decision = evaluateTenant({
+        documentType: "CPF",
+        oragoData: collectResponse.data,
+        input: {
+          rentValue: input.rentValue,
+          condominiumValue: input.condominiumValue,
+          feesValue: input.feesValue,
+        },
+      });
+
+      const tenantName = extractApplicantName("CPF", collectResponse.data);
+
+      const automaticDecision = mapDecisionStatus(decision.status);
+      const recommendation = mapRecommendationStatus(decision.recommendation);
+      const workflowStatus = getInitialWorkflowStatus(automaticDecision);
+
+      const application = await this.createApplicationAndConsumeCredit({
+        requesterId: input.requesterId,
+        data: {
+          documentType: "CPF",
+          document: input.cpf,
           requesterId: input.requesterId,
 
           tenantName,
-          tenantDocument: input.cnpj,
+          tenantDocument: input.cpf,
 
           oragoAnalysisId: oragoCreateResponse.analysis_id,
           oragoRawResponse: JSON.stringify(collectResponse),
@@ -303,48 +288,223 @@ export class RentalApplicationService {
           decisionMetadata: decision.metadata
             ? JSON.stringify(decision.metadata)
             : null,
+
           status: workflowStatus,
         },
       });
 
-      if (wallet.isVip) {
-        await tx.creditLedger.create({
-          data: {
-            userId: input.requesterId,
-            type: "CONSULT_USED",
-            amount: 0,
-            balanceAfter: wallet.availableCredits,
-            reason: `Consulta realizada como VIP. Application: ${createdApplication.id}`,
-          },
-        });
-      } else {
-        const updatedWallet = await tx.userCreditWallet.update({
-          where: { userId: input.requesterId },
-          data: {
-            availableCredits: {
-              decrement: 1,
-            },
-          },
-        });
+      await prisma.oragoConsultLock.update({
+        where: { id: lock.id },
+        data: {
+          status: "COMPLETED",
+          errorMessage: null,
+        },
+      });
 
-        await tx.creditLedger.create({
-          data: {
-            userId: input.requesterId,
-            type: "CONSULT_USED",
-            amount: -1,
-            balanceAfter: updatedWallet.availableCredits,
-            reason: `Crédito consumido na consulta. Application: ${createdApplication.id}`,
-          },
-        });
-      }
+      return {
+        application,
+        decision,
+      };
+    } catch (error: any) {
+      const existingApplication = await prisma.rentalApplication.findUnique({
+        where: {
+          document: input.cpf,
+        },
+        select: {
+          id: true,
+        },
+      });
 
-      return createdApplication;
+      await prisma.oragoConsultLock.update({
+        where: { id: lock.id },
+        data: {
+          status: existingApplication ? "COMPLETED" : "FAILED",
+          errorMessage: existingApplication
+            ? null
+            : (error?.message ?? "Erro ao processar consulta Órago"),
+        },
+      });
+
+      throw error;
+    }
+  }
+
+  async createByCnpj(input: CreateByCnpjInput) {
+    await this.assertDocumentWasNotConsulted(input.cnpj);
+
+    await creditService.ensureCanConsult(input.requesterId);
+
+    const lock = await this.createConsultLock({
+      requesterId: input.requesterId,
+      document: input.cnpj,
+      documentType: "CNPJ",
     });
 
-    return {
-      application,
-      decision,
-    };
+    try {
+      const oragoCreateResponse = await oragoClient.createPjAnalysis({
+        cnpj: input.cnpj,
+        products: {
+          company_analysis_judicial: true,
+          company_analysis_financial: true,
+          ai: true,
+        },
+      });
+
+      await prisma.oragoConsultLock.update({
+        where: { id: lock.id },
+        data: {
+          oragoAnalysisId: oragoCreateResponse.analysis_id,
+        },
+      });
+
+      const collectResponse = await collectOragoWithRetry(
+        oragoCreateResponse.analysis_id,
+      );
+
+      if (!collectResponse || collectResponse.error || !collectResponse.ready) {
+        await prisma.oragoConsultLock.update({
+          where: { id: lock.id },
+          data: {
+            status: "FAILED",
+            errorMessage: "Erro ao coletar resultado da análise na Órago",
+          },
+        });
+
+        throw new AppError(
+          502,
+          "Erro ao coletar resultado da análise na Órago",
+        );
+      }
+
+      const decision = evaluateTenant({
+        documentType: "CNPJ",
+        oragoData: collectResponse.data,
+        input: {
+          rentValue: input.rentValue,
+          condominiumValue: input.condominiumValue,
+          feesValue: input.feesValue,
+        },
+      });
+
+      const tenantName = extractApplicantName("CNPJ", collectResponse.data);
+
+      const automaticDecision = mapDecisionStatus(decision.status);
+      const recommendation = mapRecommendationStatus(decision.recommendation);
+      const workflowStatus = getInitialWorkflowStatus(automaticDecision);
+
+      const application = await prisma.$transaction(async (tx) => {
+        const wallet = await tx.userCreditWallet.findUnique({
+          where: { userId: input.requesterId },
+        });
+
+        if (!wallet) {
+          throw new AppError(403, "Carteira de créditos não encontrada");
+        }
+
+        if (!wallet.isVip && wallet.availableCredits <= 0) {
+          throw new AppError(402, "Usuário sem consultas disponíveis");
+        }
+
+        const createdApplication = await tx.rentalApplication.create({
+          data: {
+            documentType: "CNPJ",
+            document: input.cnpj,
+            requesterId: input.requesterId,
+
+            tenantName,
+            tenantDocument: input.cnpj,
+
+            oragoAnalysisId: oragoCreateResponse.analysis_id,
+            oragoRawResponse: JSON.stringify(collectResponse),
+            oragoData: JSON.stringify(collectResponse.data),
+
+            rentValue: input.rentValue,
+            condominiumValue: input.condominiumValue,
+            feesValue: input.feesValue,
+            requestedExpense: decision.requestedExpense,
+
+            automaticDecision,
+            recommendation,
+
+            housingExpenseMin: decision.housingExpense.min,
+            housingExpenseMax: decision.housingExpense.max,
+
+            decisionReasons: JSON.stringify(decision.reasons),
+            decisionMetadata: decision.metadata
+              ? JSON.stringify(decision.metadata)
+              : null,
+            status: workflowStatus,
+          },
+        });
+
+        if (wallet.isVip) {
+          await tx.creditLedger.create({
+            data: {
+              userId: input.requesterId,
+              type: "CONSULT_USED",
+              amount: 0,
+              balanceAfter: wallet.availableCredits,
+              reason: `Consulta realizada como VIP. Application: ${createdApplication.id}`,
+            },
+          });
+        } else {
+          const updatedWallet = await tx.userCreditWallet.update({
+            where: { userId: input.requesterId },
+            data: {
+              availableCredits: {
+                decrement: 1,
+              },
+            },
+          });
+
+          await tx.creditLedger.create({
+            data: {
+              userId: input.requesterId,
+              type: "CONSULT_USED",
+              amount: -1,
+              balanceAfter: updatedWallet.availableCredits,
+              reason: `Crédito consumido na consulta. Application: ${createdApplication.id}`,
+            },
+          });
+        }
+
+        return createdApplication;
+      });
+
+      await prisma.oragoConsultLock.update({
+        where: { id: lock.id },
+        data: {
+          status: "COMPLETED",
+          errorMessage: null,
+        },
+      });
+
+      return {
+        application,
+        decision,
+      };
+    } catch (error: any) {
+      const existingApplication = await prisma.rentalApplication.findUnique({
+        where: {
+          document: input.cnpj,
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      await prisma.oragoConsultLock.update({
+        where: { id: lock.id },
+        data: {
+          status: existingApplication ? "COMPLETED" : "FAILED",
+          errorMessage: existingApplication
+            ? null
+            : (error?.message ?? "Erro ao processar consulta Órago"),
+        },
+      });
+
+      throw error;
+    }
   }
 
   async fillContractData(params: {
