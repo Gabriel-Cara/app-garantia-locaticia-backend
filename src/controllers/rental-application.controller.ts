@@ -46,6 +46,10 @@ export class RentalApplicationController {
       ...input,
     });
 
+    if ("pending" in result && result.pending) {
+      return response.status(202).json(result);
+    }
+
     return response.status(201).json(result);
   }
 
@@ -56,6 +60,10 @@ export class RentalApplicationController {
       requesterId: request.user!.id,
       ...input,
     });
+
+    if ("pending" in result && result.pending) {
+      return response.status(202).json(result);
+    }
 
     return response.status(201).json(result);
   }
@@ -123,6 +131,22 @@ export class RentalApplicationController {
         lastPage: Math.ceil(total / query.perPage),
       },
     });
+  }
+
+  async getConsultStatus(request: Request, response: Response) {
+    const params = rentalApplicationParamsSchema.parse(request.params);
+
+    const result = await rentalApplicationService.getConsultStatus({
+      consultLockId: params.id,
+      requesterId: request.user!.id,
+      role: request.user!.role,
+    });
+
+    if (result.status === "PROCESSING") {
+      return response.status(202).json(result);
+    }
+
+    return response.json(result);
   }
 
   async getById(request: Request, response: Response) {

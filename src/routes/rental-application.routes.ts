@@ -28,6 +28,12 @@ rentalApplicationRoutes.get(
 );
 
 rentalApplicationRoutes.get(
+  "/consults/:id/status",
+  authorize(UserRole.ADMIN, UserRole.REAL_ESTATE),
+  asyncHandler(rentalApplicationController.getConsultStatus),
+);
+
+rentalApplicationRoutes.get(
   "/:id",
   authorize(UserRole.ADMIN, UserRole.REAL_ESTATE),
   asyncHandler(rentalApplicationController.getById),

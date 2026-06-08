@@ -166,17 +166,20 @@ model CreditLedger {
 model OragoConsultLock {
   id              String             @id @default(uuid())
   documentType    DocumentType
-  document        String
+  document        String             @unique
   requesterId     String
   requester       User               @relation(fields: [requesterId], references: [id], onDelete: Cascade)
   oragoAnalysisId String?            @unique
   status          OragoConsultStatus @default(PROCESSING)
   errorMessage    String?
 
+  rentValue        Decimal?
+  condominiumValue Decimal?
+  feesValue        Decimal?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([document])
   @@index([requesterId])
   @@index([status])
 }

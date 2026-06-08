@@ -52,6 +52,15 @@ async function requestOrago<T>(path: string, init: RequestInit = {}) {
     };
   }
 
+  console.log("[ORAGO_REQUEST]", {
+    path,
+    status: response.status,
+    ready: body?.ready,
+    error: body?.error,
+    message: body?.message,
+    analysisId: body?.analysis_id,
+  });
+
   if (!response.ok) {
     throw new AppError(
       response.status,
