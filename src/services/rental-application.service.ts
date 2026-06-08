@@ -308,6 +308,42 @@ export class RentalApplicationService {
 
     await creditService.ensureCanConsult(input.requesterId);
 
+    const existingLock = await prisma.oragoConsultLock.findUnique({
+      where: {
+        document: input.cpf,
+      },
+      select: {
+        id: true,
+        requesterId: true,
+        status: true,
+        document: true,
+        documentType: true,
+      },
+    });
+
+    if (existingLock) {
+      if (
+        existingLock.requesterId === input.requesterId &&
+        existingLock.status === "PROCESSING"
+      ) {
+        return {
+          pending: true,
+          status: "PROCESSING",
+          consultLockId: existingLock.id,
+          document: existingLock.document,
+          documentType: existingLock.documentType,
+          message:
+            "Esta consulta já está em processamento. Acompanhando o status da análise.",
+        };
+      }
+
+      throw new AppError(
+        409,
+        "Este CPF/CNPJ já possui uma consulta em processamento ou já foi consultado.",
+        "DOCUMENT_CONSULT_IN_PROGRESS",
+      );
+    }
+
     const lock = await this.createConsultLock({
       requesterId: input.requesterId,
       document: input.cpf,
@@ -420,6 +456,42 @@ export class RentalApplicationService {
     await this.assertDocumentWasNotConsulted(input.cnpj);
 
     await creditService.ensureCanConsult(input.requesterId);
+
+    const existingLock = await prisma.oragoConsultLock.findUnique({
+      where: {
+        document: input.cnpj,
+      },
+      select: {
+        id: true,
+        requesterId: true,
+        status: true,
+        document: true,
+        documentType: true,
+      },
+    });
+
+    if (existingLock) {
+      if (
+        existingLock.requesterId === input.requesterId &&
+        existingLock.status === "PROCESSING"
+      ) {
+        return {
+          pending: true,
+          status: "PROCESSING",
+          consultLockId: existingLock.id,
+          document: existingLock.document,
+          documentType: existingLock.documentType,
+          message:
+            "Esta consulta já está em processamento. Acompanhando o status da análise.",
+        };
+      }
+
+      throw new AppError(
+        409,
+        "Este CPF/CNPJ já possui uma consulta em processamento ou já foi consultado.",
+        "DOCUMENT_CONSULT_IN_PROGRESS",
+      );
+    }
 
     const lock = await this.createConsultLock({
       requesterId: input.requesterId,
