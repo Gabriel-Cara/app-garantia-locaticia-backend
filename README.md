@@ -1,123 +1,295 @@
 # Doculoc API
 
-API backend para gerenciamento de análises cadastrais de locação, controle de créditos de consultas, contestação de análises, aprovação manual por administrador e geração de contratos a partir de template `.docx`.
+API backend para análise cadastral de locação, controle de créditos de consulta, contestação, aprovação manual por administrador, recuperação de senha, geração de contratos `.docx` e armazenamento local ou S3-compatible/Cloudflare R2.
+
+---
+
+## Sumário
+
+- [Visão geral](#visão-geral)
+- [Tecnologias](#tecnologias)
+- [Requisitos](#requisitos)
+- [Arquitetura de pastas](#arquitetura-de-pastas)
+- [Fluxo de negócio](#fluxo-de-negócio)
+- [Modelo de dados principal](#modelo-de-dados-principal)
+- [Variáveis de ambiente](#variáveis-de-ambiente)
+- [Rodando localmente](#rodando-localmente)
+- [PostgreSQL local com Docker](#postgresql-local-com-docker)
+- [Prisma](#prisma)
+- [Cloudflare R2 / S3-compatible storage](#cloudflare-r2--s3-compatible-storage)
+- [Autenticação](#autenticação)
+- [Rotas](#rotas)
+- [Deploy no Render](#deploy-no-render)
+- [Troubleshooting](#troubleshooting)
+- [Boas práticas de segurança](#boas-práticas-de-segurança)
+
+---
+
+## Visão geral
+
+O Doculoc API é o backend responsável por:
+
+- Cadastro e login de usuários.
+- Perfis `ADMIN` e `REAL_ESTATE`.
+- Cadastro de perfil da imobiliária.
+- Recuperação de senha via e-mail.
+- Consulta cadastral de CPF/CNPJ via Órago.
+- Pré-análise automática de risco para locação.
+- Controle de créditos de consulta.
+- Usuários VIP com consultas ilimitadas.
+- Bloqueio contra consulta duplicada do mesmo CPF/CNPJ.
+- Contestação de consultas reprovadas.
+- Aprovação/reprovação manual pelo administrador.
+- Preenchimento de dados de locatário e imóvel.
+- Geração de contrato `.docx` via template.
+- Download de contratos armazenados localmente ou em Cloudflare R2/S3-compatible storage.
 
 ---
 
 ## Tecnologias
 
-* Node.js
-* Express
-* TypeScript
-* Prisma ORM
-* SQLite
-* JWT
-* Zod
-* Docxtemplater
-* PizZip
-* Integração com API Órago
+- Node.js 22
+- Express
+- TypeScript
+- Prisma ORM
+- PostgreSQL
+- JWT
+- Zod
+- BcryptJS
+- Docxtemplater
+- PizZip
+- AWS SDK S3
+- Cloudflare R2 / S3-compatible storage
+- Resend para envio de e-mails
+- Render para deploy sugerido
 
 ---
 
-## Visão geral do fluxo
+## Requisitos
 
-O sistema possui dois perfis principais:
+Para desenvolvimento local:
 
-* `ADMIN`
-* `REAL_ESTATE`
+- Node.js 22+
+- npm
+- Docker e Docker Compose, caso use PostgreSQL local via Docker
+- Conta/token da API Órago
+- Opcional: conta Cloudflare com R2 configurado
+- Opcional: conta Resend para recuperação de senha
 
-A imobiliária realiza consultas de CPF ou CNPJ. O backend consulta a API da Órago, processa a resposta, avalia a recomendação e cria uma `RentalApplication`.
+Verifique a versão do Node:
 
-Fluxo principal:
+```bash
+node -v
+```
+
+O projeto declara:
+
+```json
+"engines": {
+  "node": "22.x"
+}
+```
+
+---
+
+## Arquitetura de pastas
+
+Estrutura principal:
 
 ```txt
-Imobiliária consulta CPF ou CNPJ
+src/
+  app.ts
+  server.ts
+
+  config/
+    env.ts
+
+  controllers/
+    auth.controller.ts
+    contract.controller.ts
+    credit.controller.ts
+    rental-application.controller.ts
+
+  domain/
+    roles.ts
+
+  lib/
+    prisma.ts
+
+  middlewares/
+    async-handler.ts
+    auth.ts
+    error-handler.ts
+
+  routes/
+    auth.routes.ts
+    contract.routes.ts
+    credit.routes.ts
+    index.routes.ts
+    rental-application.routes.ts
+    system.routes.ts
+
+  schemas/
+    auth.schemas.ts
+    consults.schemas.ts
+    credit.schemas.ts
+    document.schemas.ts
+    rental-application.schemas.ts
+
+  services/
+    contract.service.ts
+    credit.service.ts
+    mail.service.ts
+    orago-client.ts
+    rental-application.service.ts
+    storage.service.ts
+
+  templates/
+    default-rental-contract.docx
+
+  types/
+    express.d.ts
+
+  utils/
+    build-password-reset-email.ts
+    calculate-housing-expense-from-income.ts
+    calculate-pj-housing-expense.ts
+    evaluate-pf-tenant.ts
+    evaluate-pj-tenant.ts
+    evaluate-tenant.ts
+    extract-applicant-name.ts
+    get-recommendation-from-structured-data.ts
+    hash-token.ts
+    parse-brazilian-currency.ts
+    parse-currency-range.ts
+    parse-number.ts
+    parse-percentage.ts
+```
+
+---
+
+## Fluxo de negócio
+
+### Consulta aprovada automaticamente
+
+```txt
+Imobiliária faz consulta CPF/CNPJ
+  ↓
+Backend cria lock da consulta
   ↓
 Backend consulta API Órago
   ↓
-Backend avalia se é recomendado ou não
+Backend coleta resultado
   ↓
-Se aprovado:
-  status = WAITING_CONTRACT_DATA
+Backend avalia decisão automática
   ↓
-Imobiliária preenche dados do locatário e imóvel
+Cria RentalApplication
   ↓
-status = WAITING_ADMIN_CONTRACT
+Consome 1 crédito, exceto usuário VIP
   ↓
-Admin gera contrato DOCX
+Status: WAITING_CONTRACT_DATA
   ↓
-status = CONTRACT_GENERATED
+Imobiliária preenche dados do contrato
+  ↓
+Status: WAITING_ADMIN_CONTRACT
+  ↓
+Admin gera contrato
+  ↓
+Status: CONTRACT_GENERATED
+```
 
-Se reprovado:
-  status = REJECTED
+### Consulta reprovada automaticamente
+
+```txt
+Imobiliária faz consulta CPF/CNPJ
+  ↓
+Backend avalia risco
+  ↓
+Status: REJECTED
   ↓
 Imobiliária pode contestar
   ↓
-status = CONTESTED
+Status: CONTESTED
   ↓
-Admin pode aprovar ou reprovar manualmente
+Admin aprova ou reprova manualmente
 ```
 
----
-
-## Perfis de usuário
-
-### ADMIN
-
-Pode:
-
-* Ver todas as consultas
-* Aprovar ou reprovar consultas manualmente
-* Gerar contratos
-* Baixar contratos
-* Gerenciar créditos das imobiliárias
-* Definir imobiliária como VIP
-* Consultar ledger de créditos
-
-### REAL_ESTATE
-
-Pode:
-
-* Fazer consulta por CPF
-* Fazer consulta por CNPJ
-* Ver suas próprias consultas
-* Contestar consulta reprovada
-* Preencher dados de contrato quando a consulta for aprovada
-* Baixar contrato gerado de suas próprias consultas
-
----
-
-## Controle de créditos
-
-Ao cadastrar um usuário `REAL_ESTATE`, o sistema cria automaticamente uma carteira de créditos com:
+### Aprovação manual pelo admin
 
 ```txt
-availableCredits = 3
-isVip = false
-```
-
-Regras:
-
-```txt
-Usuário comum:
-  cada consulta consome 1 crédito
-
-Usuário VIP:
-  consultas infinitas
-  consultas não descontam crédito
-
-Somente ADMIN:
-  pode alterar créditos
-  pode ativar/desativar VIP
+Consulta REJECTED ou CONTESTED
+  ↓
+Admin decide APPROVED
+  ↓
+Status: WAITING_CONTRACT_DATA
+  ↓
+Imobiliária pode preencher dados do contrato
 ```
 
 ---
 
-## Status da consulta
+## Modelo de dados principal
 
-A entidade principal do fluxo é `RentalApplication`.
+### User
 
-Possíveis status:
+Representa um usuário do sistema.
+
+Perfis:
+
+```txt
+ADMIN
+REAL_ESTATE
+```
+
+### RealEstateProfile
+
+Perfil complementar para usuários `REAL_ESTATE`:
+
+- Nome da imobiliária
+- CNPJ opcional
+- Telefone
+- Responsável
+
+### UserCreditWallet
+
+Carteira de créditos da imobiliária:
+
+```txt
+availableCredits: número de consultas disponíveis
+isVip: se true, não consome créditos
+```
+
+### CreditLedger
+
+Histórico de movimentações de crédito:
+
+```txt
+INITIAL_GRANT
+ADMIN_SET
+ADMIN_INCREMENT
+ADMIN_DECREMENT
+CONSULT_USED
+VIP_ENABLED
+VIP_DISABLED
+```
+
+### OragoConsultLock
+
+Controle para evitar consultas simultâneas/duplicadas do mesmo CPF/CNPJ.
+
+Status:
+
+```txt
+PROCESSING
+COMPLETED
+FAILED
+```
+
+### RentalApplication
+
+Entidade principal do fluxo de locação.
+
+Status possíveis:
 
 ```txt
 CONSULTED
@@ -130,93 +302,285 @@ ADMIN_REJECTED
 CANCELLED
 ```
 
-### Significado
+### RentalApplicationContest
 
-| Status                   | Descrição                                                     |
-| ------------------------ | ------------------------------------------------------------- |
-| `CONSULTED`              | Consulta criada, mas sem fluxo avançado concluído             |
-| `WAITING_CONTRACT_DATA`  | Consulta aprovada e aguardando dados do locatário/imóvel      |
-| `WAITING_ADMIN_CONTRACT` | Dados preenchidos e aguardando geração do contrato pelo admin |
-| `CONTRACT_GENERATED`     | Contrato gerado com sucesso                                   |
-| `REJECTED`               | Consulta reprovada automaticamente                            |
-| `CONTESTED`              | Consulta reprovada foi contestada pela imobiliária            |
-| `ADMIN_REJECTED`         | Admin reprovou manualmente                                    |
-| `CANCELLED`              | Consulta cancelada                                            |
+Contestação enviada pela imobiliária para uma consulta reprovada.
+
+Status:
+
+```txt
+OPEN
+ACCEPTED
+REJECTED
+CANCELLED
+```
+
+### Contract
+
+Contrato gerado a partir de template `.docx`.
+
+Pode ser armazenado:
+
+```txt
+local
+r2
+s3
+```
+
+Campos importantes:
+
+```txt
+filePath       usado quando STORAGE_DRIVER=local
+storageBucket  bucket remoto
+storageKey     chave do arquivo no R2/S3
+mimeType       tipo do arquivo
+sizeBytes      tamanho do arquivo
+```
 
 ---
 
 ## Variáveis de ambiente
 
-Crie um arquivo `.env` na raiz do projeto:
+Crie um arquivo `.env` na raiz do projeto com base no `.env.example`.
+
+Exemplo local:
 
 ```env
 NODE_ENV=development
 PORT=3333
-HOST=127.0.0.1
+HOST="127.0.0.1"
 
-DATABASE_URL="file:./dev.db"
+DATABASE_URL="postgresql://doculoc:doculoc@localhost:5432/doculoc?schema=public"
 
-JWT_SECRET="sua_chave_jwt_com_no_minimo_24_caracteres"
+JWT_SECRET="troque-por-um-segredo-com-pelo-menos-24-caracteres"
 
-ORAGO_BASE_URL="https://api.orago.com.br"
-ORAGO_API_TOKEN="seu_token_orago"
+ORAGO_BASE_URL="https://sandbox.oragoapp.com.br"
+ORAGO_API_TOKEN="cole-sua-chave-sandbox-ou-producao"
 
-CONTRACT_TEMPLATE_PATH="src/templates/default-rental-contract.docx"
-CONTRACT_OUTPUT_DIR="storage/contracts"
+CONTRACT_TEMPLATE_PATH=src/templates/default-rental-contract.docx
+
+STORAGE_DRIVER=local
+CONTRACT_OUTPUT_DIR=storage/contracts
+
+S3_ENDPOINT=
+S3_REGION=auto
+S3_BUCKET=
+S3_ACCESS_KEY_ID=
+S3_SECRET_ACCESS_KEY=
+
+CORS_ORIGIN="http://localhost:5173"
+APP_URL="http://localhost:5173"
+
+RESEND_API_KEY="re_xxxxxxxxxxxxxxxxxxxxxxxxx"
+MAIL_FROM="Doculoc <noreply@doculoc.com.br>"
+PASSWORD_RESET_TOKEN_EXPIRES_MINUTES=60
 ```
+
+### Descrição das variáveis
+
+| Variável | Obrigatória | Descrição |
+|---|---:|---|
+| `NODE_ENV` | Sim | `development`, `test` ou `production`. |
+| `PORT` | Sim | Porta da API. |
+| `HOST` | Sim | Host de bind. Use `0.0.0.0` em produção no Render. |
+| `DATABASE_URL` | Sim | URL PostgreSQL usada pelo Prisma. |
+| `JWT_SECRET` | Sim | Segredo JWT com no mínimo 24 caracteres. |
+| `ORAGO_BASE_URL` | Sim | URL base da API Órago. |
+| `ORAGO_API_TOKEN` | Sim | Token da API Órago. |
+| `CONTRACT_TEMPLATE_PATH` | Sim | Caminho do template `.docx`. |
+| `STORAGE_DRIVER` | Sim | `local`, `r2` ou `s3`. |
+| `CONTRACT_OUTPUT_DIR` | Sim para local | Pasta local para contratos quando `STORAGE_DRIVER=local`. |
+| `S3_ENDPOINT` | Sim para R2/S3 | Endpoint S3-compatible. |
+| `S3_REGION` | Sim para R2/S3 | Use `auto` para Cloudflare R2. |
+| `S3_BUCKET` | Sim para R2/S3 | Nome do bucket. |
+| `S3_ACCESS_KEY_ID` | Sim para R2/S3 | Access Key ID do bucket. |
+| `S3_SECRET_ACCESS_KEY` | Sim para R2/S3 | Secret Access Key do bucket. |
+| `CORS_ORIGIN` | Recomendado | URL do frontend autorizada no CORS. |
+| `APP_URL` | Sim para reset de senha | URL base do frontend para links de reset. |
+| `RESEND_API_KEY` | Sim para e-mail real | API key do Resend. |
+| `MAIL_FROM` | Sim para e-mail real | Remetente dos e-mails. |
+| `PASSWORD_RESET_TOKEN_EXPIRES_MINUTES` | Não | Tempo de expiração do reset de senha. |
 
 ---
 
-## Instalação
+## Rodando localmente
+
+Instale dependências:
 
 ```bash
 npm install
 ```
 
-Gerar Prisma Client:
+Gere o Prisma Client:
 
 ```bash
-npx prisma generate
+npm run prisma:generate
 ```
 
-Rodar migrations:
+Rode as migrations:
 
 ```bash
-npx prisma migrate dev
+npm run prisma:migrate
 ```
 
-Rodar em desenvolvimento:
+Inicie o servidor em desenvolvimento:
 
 ```bash
 npm run dev
 ```
 
-Build:
+API local:
 
-```bash
-npm run build
+```txt
+http://localhost:3333
 ```
 
-Produção:
+Health check:
 
-```bash
-npm start
+```http
+GET /health
 ```
 
 ---
 
-## Scripts úteis
+## PostgreSQL local com Docker
 
-```json
-{
-  "dev": "tsx watch src/server.ts",
-  "build": "tsc",
-  "start": "node dist/server.js",
-  "postinstall": "prisma generate",
-  "prisma:generate": "prisma generate",
-  "prisma:migrate": "prisma migrate dev",
-  "prisma:studio": "prisma studio"
-}
+O projeto já possui `docker-compose.yml`. Caso necessário, use um compose como este:
+
+```yml
+services:
+  postgres:
+    image: postgres:16
+    container_name: doculoc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: doculoc
+      POSTGRES_PASSWORD: doculoc
+      POSTGRES_DB: doculoc
+    ports:
+      - "5432:5432"
+    volumes:
+      - doculoc_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  doculoc_postgres_data:
+```
+
+Suba o banco:
+
+```bash
+docker compose up -d
+```
+
+Pare o banco:
+
+```bash
+docker compose down
+```
+
+Remova o volume local:
+
+```bash
+docker compose down -v
+```
+
+---
+
+## Prisma
+
+### Gerar Prisma Client
+
+```bash
+npm run prisma:generate
+```
+
+### Criar/aplicar migration em desenvolvimento
+
+```bash
+npm run prisma:migrate
+```
+
+### Aplicar migrations em produção
+
+```bash
+npm run prisma:deploy
+```
+
+### Abrir Prisma Studio
+
+```bash
+npm run prisma:studio
+```
+
+### Resetar banco local
+
+```bash
+npm run prisma:reset
+```
+
+> Cuidado: `prisma:reset` apaga os dados do banco.
+
+---
+
+## Cloudflare R2 / S3-compatible storage
+
+A API suporta três drivers:
+
+```txt
+local
+r2
+s3
+```
+
+### Desenvolvimento local
+
+```env
+STORAGE_DRIVER=local
+CONTRACT_OUTPUT_DIR=storage/contracts
+```
+
+Nesse modo, os contratos são gravados no filesystem local.
+
+### Produção com Cloudflare R2
+
+Configure:
+
+```env
+STORAGE_DRIVER=r2
+S3_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+S3_REGION=auto
+S3_BUCKET=doculoc-contracts-prod
+S3_ACCESS_KEY_ID=<access_key_id>
+S3_SECRET_ACCESS_KEY=<secret_access_key>
+```
+
+### Fluxo de contrato com R2
+
+```txt
+Admin gera contrato
+  ↓
+ContractService renderiza DOCX em memória
+  ↓
+StorageService envia o buffer para R2
+  ↓
+Contract salva storageDriver/storageBucket/storageKey
+  ↓
+Download busca o arquivo no R2 e transmite o DOCX ao cliente
+```
+
+### Download
+
+O endpoint de download retorna o arquivo `.docx` diretamente:
+
+```http
+GET /contracts/:id/download
+```
+
+Headers esperados:
+
+```http
+Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document
+Content-Disposition: attachment; filename="contrato-doculoc.docx"
 ```
 
 ---
@@ -231,13 +595,21 @@ Após login, envie o token no header:
 Authorization: Bearer TOKEN
 ```
 
----
-
-# Rotas
-
-## Auth
+Rotas protegidas exigem usuário autenticado e, em alguns casos, role específica.
 
 ---
+
+## Rotas
+
+Base local:
+
+```txt
+http://localhost:3333
+```
+
+---
+
+# Auth
 
 ## Criar usuário
 
@@ -245,59 +617,38 @@ Authorization: Bearer TOKEN
 POST /auth/register
 ```
 
-### Body ADMIN
+### Criar ADMIN
 
 ```json
 {
   "name": "Admin Doculoc",
-  "email": "admin@doculoc.com",
+  "email": "admin@doculoc.com.br",
   "password": "12345678",
   "role": "ADMIN"
 }
 ```
 
-### Body REAL_ESTATE
+### Criar REAL_ESTATE
 
 ```json
 {
-  "email": "imobiliaria@teste.com",
+  "email": "imobiliaria@doculoc.com.br",
   "password": "12345678",
   "role": "REAL_ESTATE",
   "realEstateProfile": {
-    "name": "Imobiliária Teste",
-    "cnpj": "00643404000101",
+    "name": "Imobiliária Exemplo",
+    "cnpj": "12345678000199",
     "phone": "11999999999",
-    "responsibleName": "Maria Silva"
+    "responsibleName": "Responsável Exemplo"
   }
 }
 ```
 
-Para usuários `REAL_ESTATE`, o campo `cnpj` é opcional. O `name` do usuário é preenchido com `responsibleName`; o nome da imobiliária fica em `realEstateProfile.name`.
+Observações:
 
-### Response
-
-```json
-{
-  "user": {
-    "id": "uuid",
-    "name": "Maria Silva",
-    "email": "imobiliaria@teste.com",
-    "role": "REAL_ESTATE",
-    "createdAt": "2026-01-01T00:00:00.000Z",
-    "realEstateProfile": {
-      "id": "uuid",
-      "name": "Imobiliária Teste",
-      "cnpj": "00643404000101",
-      "phone": "11999999999",
-      "responsibleName": "Maria Silva",
-      "createdAt": "2026-01-01T00:00:00.000Z",
-      "updatedAt": "2026-01-01T00:00:00.000Z"
-    }
-  }
-}
-```
-
-Quando o usuário criado for `REAL_ESTATE`, o backend cria automaticamente uma carteira com 3 consultas gratuitas.
+- `REAL_ESTATE` precisa enviar `realEstateProfile`.
+- Ao criar `REAL_ESTATE`, a API cria wallet com 3 créditos.
+- `cnpj` pode ser omitido ou enviado como string vazia.
 
 ---
 
@@ -307,35 +658,63 @@ Quando o usuário criado for `REAL_ESTATE`, o backend cria automaticamente uma c
 POST /auth/login
 ```
 
-### Body
-
 ```json
 {
-  "email": "imobiliaria@teste.com",
+  "email": "imobiliaria@doculoc.com.br",
   "password": "12345678"
 }
 ```
 
-### Response
+Resposta:
 
 ```json
 {
-  "token": "jwt-token",
+  "token": "jwt",
   "user": {
     "id": "uuid",
-    "name": "Maria Silva",
-    "email": "imobiliaria@teste.com",
+    "name": "Responsável Exemplo",
+    "email": "imobiliaria@doculoc.com.br",
     "role": "REAL_ESTATE",
-    "realEstateProfile": {
-      "id": "uuid",
-      "name": "Imobiliária Teste",
-      "cnpj": "00643404000101",
-      "phone": "11999999999",
-      "responsibleName": "Maria Silva",
-      "createdAt": "2026-01-01T00:00:00.000Z",
-      "updatedAt": "2026-01-01T00:00:00.000Z"
-    }
+    "realEstateProfile": {}
   }
+}
+```
+
+---
+
+## Solicitar recuperação de senha
+
+```http
+POST /auth/forgot-password
+```
+
+```json
+{
+  "email": "usuario@doculoc.com.br"
+}
+```
+
+Resposta genérica:
+
+```json
+{
+  "message": "Se um usuário com esse email existir, um link para resetar a senha será enviado."
+}
+```
+
+---
+
+## Redefinir senha
+
+```http
+POST /auth/reset-password
+```
+
+```json
+{
+  "token": "token_recebido_no_email",
+  "password": "novaSenha123",
+  "passwordConfirmation": "novaSenha123"
 }
 ```
 
@@ -343,189 +722,75 @@ POST /auth/login
 
 # Rental Applications
 
----
+Todas as rotas abaixo exigem autenticação.
 
-## Criar consulta CPF
+## Criar consulta PF
 
-Permissão:
-
-```txt
-REAL_ESTATE
-```
+Role: `REAL_ESTATE`
 
 ```http
 POST /rental-applications/cpf
 Authorization: Bearer TOKEN
 ```
 
-### Body
-
 ```json
 {
   "cpf": "12345678909",
+  "email": "locatario@email.com",
+  "phone": "11999999999",
   "rentValue": 1200,
   "condominiumValue": 300,
-  "feesValue": 150
+  "feesValue": 100
 }
 ```
 
-### Response aprovada
+Campos:
 
-```json
-{
-  "application": {
-    "id": "uuid",
-    "documentType": "CPF",
-    "document": "12345678909",
-    "requesterId": "uuid",
-    "rentValue": "1200",
-    "condominiumValue": "300",
-    "feesValue": "150",
-    "requestedExpense": "1650",
-    "automaticDecision": "APPROVED",
-    "recommendation": "RECOMMENDED",
-    "status": "WAITING_CONTRACT_DATA",
-    "housingExpenseMin": "1000",
-    "housingExpenseMax": "2500",
-    "decisionReasons": "[...]",
-    "decisionMetadata": null,
-    "createdAt": "2026-01-01T00:00:00.000Z",
-    "updatedAt": "2026-01-01T00:00:00.000Z"
-  },
-  "decision": {
-    "status": "approved",
-    "recommendation": "recommended",
-    "requestedExpense": 1650,
-    "housingExpense": {
-      "min": 1000,
-      "max": 2500,
-      "raw": "..."
-    },
-    "reasons": [
-      "Análise recomendada e despesa dentro do limite permitido"
-    ]
-  }
-}
-```
-
-### Response reprovada
-
-```json
-{
-  "application": {
-    "id": "uuid",
-    "documentType": "CPF",
-    "document": "12345678909",
-    "automaticDecision": "REJECTED",
-    "recommendation": "NOT_RECOMMENDED",
-    "status": "REJECTED"
-  },
-  "decision": {
-    "status": "rejected",
-    "recommendation": "not_recommended",
-    "requestedExpense": 1650,
-    "housingExpense": {
-      "min": 423.6,
-      "max": 847.2,
-      "raw": "..."
-    },
-    "reasons": [
-      "Score de crédito baixo",
-      "Probabilidade de inadimplência alta"
-    ]
-  }
-}
-```
+- `cpf`: 11 dígitos, sem pontos ou traços.
+- `rentValue`: aluguel.
+- `condominiumValue`: condomínio.
+- `feesValue`: outras taxas.
 
 ---
 
-## Criar consulta CNPJ
+## Criar consulta PJ
 
-Permissão:
-
-```txt
-REAL_ESTATE
-```
+Role: `REAL_ESTATE`
 
 ```http
 POST /rental-applications/cnpj
 Authorization: Bearer TOKEN
 ```
 
-### Body
-
 ```json
 {
-  "cnpj": "00643404000101",
-  "rentValue": 1500,
-  "condominiumValue": 400,
+  "cnpj": "12345678000199",
+  "rentValue": 2500,
+  "condominiumValue": 500,
   "feesValue": 200
 }
 ```
 
-### Response aprovada
+Campos:
 
-```json
-{
-  "application": {
-    "id": "uuid",
-    "documentType": "CNPJ",
-    "document": "00643404000101",
-    "requesterId": "uuid",
-    "rentValue": "1500",
-    "condominiumValue": "400",
-    "feesValue": "200",
-    "requestedExpense": "2100",
-    "automaticDecision": "APPROVED",
-    "recommendation": "RECOMMENDED",
-    "status": "WAITING_CONTRACT_DATA"
-  },
-  "decision": {
-    "status": "approved",
-    "recommendation": "recommended",
-    "requestedExpense": 2100,
-    "housingExpense": {
-      "min": 1881.24,
-      "max": 2821.86,
-      "raw": "Faturamento presumido anual: 225749. Percentual aplicado: 15%"
-    },
-    "reasons": [
-      "Empresa ativa, sem negativações, sem dívidas/protestos relevantes, risco de inadimplência aceitável e despesa dentro da capacidade estimada"
-    ],
-    "metadata": {
-      "companyStatus": "ATIVA",
-      "creditScore": 439,
-      "defaultProbability": 7.31,
-      "financialRiskLevel": 2,
-      "judicialRiskLevel": 1,
-      "companyRiskLevel": 1
-    }
-  }
-}
-```
+- `cnpj`: 14 dígitos, sem pontos ou traços.
 
 ---
 
 ## Listar consultas
 
-Permissão:
-
-```txt
-ADMIN
-REAL_ESTATE
-```
+Role: `ADMIN` ou `REAL_ESTATE`
 
 ```http
-GET /rental-applications
-Authorization: Bearer TOKEN
+GET /rental-applications?page=1&perPage=25
 ```
 
-### Query params opcionais
+Filtros opcionais:
 
 ```txt
+requesterId
 status
 document
-requesterId
 page
 perPage
 ```
@@ -533,114 +798,33 @@ perPage
 Exemplo:
 
 ```http
-GET /rental-applications?status=WAITING_ADMIN_CONTRACT&page=1&perPage=25
+GET /rental-applications?status=WAITING_ADMIN_CONTRACT&page=1&perPage=10
 ```
 
-### Response
+Regra:
 
-```json
-{
-  "applications": [
-    {
-      "id": "uuid",
-      "documentType": "CPF",
-      "document": "12345678909",
-      "status": "WAITING_CONTRACT_DATA",
-      "automaticDecision": "APPROVED",
-      "recommendation": "RECOMMENDED",
-      "decisionReasons": [
-        "Análise recomendada e despesa dentro do limite permitido"
-      ],
-      "decisionMetadata": null,
-      "requester": {
-        "id": "uuid",
-        "name": "Maria Silva",
-        "email": "imobiliaria@teste.com",
-        "realEstateProfile": {
-          "id": "uuid",
-          "name": "Imobiliária Teste",
-          "cnpj": "00643404000101",
-          "phone": "11999999999",
-          "responsibleName": "Maria Silva"
-        }
-      },
-      "contract": null,
-      "contests": []
-    }
-  ],
-  "meta": {
-    "page": 1,
-    "perPage": 25,
-    "total": 1,
-    "lastPage": 1
-  }
-}
-```
-
-Observação:
-
-* `ADMIN` visualiza todas as consultas.
-* `REAL_ESTATE` visualiza somente suas próprias consultas.
+- `ADMIN` lista todas.
+- `REAL_ESTATE` lista apenas suas próprias consultas.
 
 ---
 
-## Buscar consulta por ID
+## Detalhar consulta
 
-Permissão:
-
-```txt
-ADMIN
-REAL_ESTATE dono da consulta
-```
+Role: `ADMIN` ou `REAL_ESTATE`
 
 ```http
 GET /rental-applications/:id
-Authorization: Bearer TOKEN
-```
-
-### Response
-
-```json
-{
-  "application": {
-    "id": "uuid",
-    "documentType": "CPF",
-    "document": "12345678909",
-    "status": "WAITING_CONTRACT_DATA",
-    "automaticDecision": "APPROVED",
-    "recommendation": "RECOMMENDED",
-    "decisionReasons": [
-      "Análise recomendada e despesa dentro do limite permitido"
-    ],
-    "decisionMetadata": null,
-    "contract": null,
-    "contests": []
-  }
-}
 ```
 
 ---
 
 ## Preencher dados para contrato
 
-Permissão:
-
-```txt
-REAL_ESTATE dono da consulta
-```
-
-A consulta precisa estar com status:
-
-```txt
-WAITING_CONTRACT_DATA
-```
+Role: `REAL_ESTATE`
 
 ```http
 PATCH /rental-applications/:id/contract-data
-Authorization: Bearer TOKEN
 ```
-
-### Body
 
 ```json
 {
@@ -651,200 +835,113 @@ Authorization: Bearer TOKEN
   "propertyZipCode": "01001000",
   "propertyStreet": "Praça da Sé",
   "propertyNumber": "100",
-  "propertyComplement": "Apartamento 12",
+  "propertyComplement": "Apto 12",
   "propertyNeighborhood": "Sé",
   "propertyCity": "São Paulo",
   "propertyState": "SP"
 }
 ```
 
-### Response
-
-```json
-{
-  "application": {
-    "id": "uuid",
-    "tenantName": "Fulano da Silva",
-    "tenantDocument": "12345678909",
-    "tenantEmail": "fulano@email.com",
-    "tenantPhone": "11999999999",
-    "propertyZipCode": "01001000",
-    "propertyStreet": "Praça da Sé",
-    "propertyNumber": "100",
-    "propertyComplement": "Apartamento 12",
-    "propertyNeighborhood": "Sé",
-    "propertyCity": "São Paulo",
-    "propertyState": "SP",
-    "status": "WAITING_ADMIN_CONTRACT"
-  }
-}
-```
-
-Ao preencher esses dados, o sistema cria ou atualiza um contrato com:
+Permitido quando a consulta está em:
 
 ```txt
-status = PENDING
+WAITING_CONTRACT_DATA
+```
+
+Após preenchimento, o status muda para:
+
+```txt
+WAITING_ADMIN_CONTRACT
 ```
 
 ---
 
 ## Contestar consulta
 
-Permissão:
+Role: `REAL_ESTATE`
 
-```txt
-REAL_ESTATE dono da consulta
+```http
+POST /rental-applications/:id/contest
 ```
 
-A consulta precisa estar com status:
+```json
+{
+  "reason": "Cliente apresentou documentação complementar e comprovante de renda atualizado."
+}
+```
+
+Permitido quando a consulta está em:
 
 ```txt
 REJECTED
 ```
 
-```http
-POST /rental-applications/:id/contest
-Authorization: Bearer TOKEN
-```
-
-### Body
-
-```json
-{
-  "reason": "Cliente apresentou documentação complementar, comprovante de renda atualizado e fiador adicional."
-}
-```
-
-### Response
-
-```json
-{
-  "contest": {
-    "id": "uuid",
-    "applicationId": "uuid",
-    "createdById": "uuid",
-    "reason": "Cliente apresentou documentação complementar, comprovante de renda atualizado e fiador adicional.",
-    "status": "OPEN",
-    "reviewedById": null,
-    "reviewedAt": null,
-    "adminNote": null,
-    "createdAt": "2026-01-01T00:00:00.000Z",
-    "updatedAt": "2026-01-01T00:00:00.000Z"
-  }
-}
-```
-
-Após contestar:
+Após contestação, o status muda para:
 
 ```txt
-RentalApplication.status = CONTESTED
+CONTESTED
 ```
 
 ---
 
 ## Decisão manual do admin
 
-Permissão:
-
-```txt
-ADMIN
-```
+Role: `ADMIN`
 
 ```http
 PATCH /rental-applications/:id/admin-decision
-Authorization: Bearer TOKEN
 ```
 
-### Aprovar manualmente
+Aprovar:
 
 ```json
 {
   "decision": "APPROVED",
-  "reason": "Aprovado manualmente após análise dos documentos complementares."
+  "reason": "Aprovado manualmente após análise documental."
 }
 ```
 
-### Response
-
-```json
-{
-  "application": {
-    "id": "uuid",
-    "status": "WAITING_CONTRACT_DATA",
-    "adminDecision": "APPROVED",
-    "adminDecisionById": "uuid",
-    "adminDecisionReason": "Aprovado manualmente após análise dos documentos complementares.",
-    "adminDecisionAt": "2026-01-01T00:00:00.000Z"
-  }
-}
-```
-
-Se houver contestação aberta, ela será marcada como:
-
-```txt
-ACCEPTED
-```
-
-### Reprovar manualmente
+Reprovar:
 
 ```json
 {
   "decision": "REJECTED",
-  "reason": "Documentação complementar insuficiente para aprovação."
+  "reason": "Documentação complementar insuficiente."
 }
 ```
 
-### Response
-
-```json
-{
-  "application": {
-    "id": "uuid",
-    "status": "ADMIN_REJECTED",
-    "adminDecision": "REJECTED",
-    "adminDecisionById": "uuid",
-    "adminDecisionReason": "Documentação complementar insuficiente para aprovação.",
-    "adminDecisionAt": "2026-01-01T00:00:00.000Z"
-  }
-}
-```
-
-Se houver contestação aberta, ela será marcada como:
+Se aprovado, a consulta volta para:
 
 ```txt
-REJECTED
+WAITING_CONTRACT_DATA
+```
+
+Se reprovado, a consulta vai para:
+
+```txt
+ADMIN_REJECTED
 ```
 
 ---
 
 # Contracts
 
----
-
 ## Gerar contrato
 
-Permissão:
+Role: `ADMIN`
 
-```txt
-ADMIN
+```http
+POST /contracts/applications/:applicationId/generate
+Authorization: Bearer TOKEN_ADMIN
 ```
 
-A consulta precisa estar com status:
+A consulta precisa estar em:
 
 ```txt
 WAITING_ADMIN_CONTRACT
 ```
 
-```http
-POST /contracts/applications/:applicationId/generate
-Authorization: Bearer TOKEN
-```
-
-### Body
-
-Não precisa body.
-
-### Response
+Resposta:
 
 ```json
 {
@@ -852,102 +949,44 @@ Não precisa body.
     "id": "uuid",
     "applicationId": "uuid",
     "status": "GENERATED",
-    "templateName": "default-rental-contract.docx",
-    "filePath": "storage/contracts/contrato-uuid.docx",
     "fileName": "contrato-uuid.docx",
-    "generatedById": "uuid",
-    "generatedAt": "2026-01-01T00:00:00.000Z",
-    "errorMessage": null,
-    "createdAt": "2026-01-01T00:00:00.000Z",
-    "updatedAt": "2026-01-01T00:00:00.000Z"
+    "storageDriver": "local | r2 | s3",
+    "storageKey": "..."
   }
 }
-```
-
-Após gerar:
-
-```txt
-RentalApplication.status = CONTRACT_GENERATED
-Contract.status = GENERATED
 ```
 
 ---
 
 ## Baixar contrato
 
-Permissão:
-
-```txt
-ADMIN
-REAL_ESTATE dono da consulta
-```
+Role: `ADMIN` ou `REAL_ESTATE` dona da consulta
 
 ```http
 GET /contracts/:id/download
-Authorization: Bearer TOKEN
 ```
 
-### Response
-
-Retorna o arquivo `.docx`.
-
-Headers esperados:
-
-```http
-Content-Disposition: attachment; filename="contrato-uuid.docx"
-Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document
-```
+Retorna o arquivo `.docx` diretamente.
 
 ---
 
-# Créditos
+# Credits
 
----
+Rotas exclusivas para `ADMIN`.
 
-## Consultar wallet
-
-Permissão:
-
-```txt
-ADMIN
-```
+## Consultar carteira
 
 ```http
 GET /credits/users/:userId/wallet
-Authorization: Bearer TOKEN
-```
-
-### Response
-
-```json
-{
-  "wallet": {
-    "id": "uuid",
-    "userId": "uuid",
-    "availableCredits": 3,
-    "isVip": false,
-    "createdAt": "2026-01-01T00:00:00.000Z",
-    "updatedAt": "2026-01-01T00:00:00.000Z"
-  }
-}
 ```
 
 ---
 
 ## Definir créditos
 
-Permissão:
-
-```txt
-ADMIN
-```
-
 ```http
 PATCH /credits/users/:userId/credits
-Authorization: Bearer TOKEN
 ```
-
-### Body
 
 ```json
 {
@@ -956,447 +995,281 @@ Authorization: Bearer TOKEN
 }
 ```
 
-### Response
-
-```json
-{
-  "wallet": {
-    "id": "uuid",
-    "userId": "uuid",
-    "availableCredits": 10,
-    "isVip": false,
-    "updatedAt": "2026-01-01T00:00:00.000Z"
-  }
-}
-```
-
 ---
 
-## Ativar ou desativar VIP
-
-Permissão:
-
-```txt
-ADMIN
-```
+## Ativar/desativar VIP
 
 ```http
 PATCH /credits/users/:userId/vip
-Authorization: Bearer TOKEN
 ```
-
-### Body
 
 ```json
 {
   "isVip": true,
-  "reason": "Usuário definido como VIP."
-}
-```
-
-### Response
-
-```json
-{
-  "wallet": {
-    "id": "uuid",
-    "userId": "uuid",
-    "availableCredits": 10,
-    "isVip": true,
-    "updatedAt": "2026-01-01T00:00:00.000Z"
-  }
+  "reason": "Cliente estratégico."
 }
 ```
 
 ---
 
-## Consultar histórico de créditos
-
-Permissão:
-
-```txt
-ADMIN
-```
+## Histórico de créditos
 
 ```http
 GET /credits/users/:userId/ledger
-Authorization: Bearer TOKEN
-```
-
-### Response
-
-```json
-{
-  "ledger": [
-    {
-      "id": "uuid",
-      "userId": "uuid",
-      "actorId": "uuid-do-admin",
-      "type": "ADMIN_SET",
-      "amount": 10,
-      "balanceAfter": 10,
-      "reason": "Créditos adicionados manualmente pelo admin.",
-      "createdAt": "2026-01-01T00:00:00.000Z"
-    },
-    {
-      "id": "uuid",
-      "userId": "uuid",
-      "actorId": null,
-      "type": "INITIAL_GRANT",
-      "amount": 3,
-      "balanceAfter": 3,
-      "reason": "Créditos gratuitos iniciais no cadastro",
-      "createdAt": "2026-01-01T00:00:00.000Z"
-    }
-  ]
-}
 ```
 
 ---
 
-# Template DOCX
+# System
 
-O sistema gera contratos a partir de um arquivo `.docx` configurado em:
+Rotas protegidas.
+
+## Health check da Órago
+
+```http
+GET /system/health-check
+```
+
+## Produtos disponíveis na Órago
+
+```http
+GET /system/available-products
+```
+
+---
+
+## Deploy no Render
+
+### Backend Web Service
+
+Configuração sugerida:
+
+```txt
+Runtime: Node
+Branch: main
+Build Command: npm ci --include=dev && npm run prisma:generate && npm run build
+Pre-Deploy Command: npm run prisma:deploy
+Start Command: npm run start
+Health Check Path: /health
+```
+
+### Variáveis de produção no Render
 
 ```env
-CONTRACT_TEMPLATE_PATH="src/templates/default-rental-contract.docx"
+NODE_ENV=production
+HOST=0.0.0.0
+PORT=3333
+
+DATABASE_URL=<Internal Database URL do Render Postgres>
+
+JWT_SECRET=<segredo_forte>
+
+ORAGO_BASE_URL=<url_producao_orago>
+ORAGO_API_TOKEN=<token_producao_orago>
+
+CONTRACT_TEMPLATE_PATH=src/templates/default-rental-contract.docx
+
+STORAGE_DRIVER=r2
+CONTRACT_OUTPUT_DIR=storage/contracts
+
+S3_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+S3_REGION=auto
+S3_BUCKET=doculoc-contracts-prod
+S3_ACCESS_KEY_ID=<access_key_id>
+S3_SECRET_ACCESS_KEY=<secret_access_key>
+
+CORS_ORIGIN=https://seu-frontend.com.br
+APP_URL=https://seu-frontend.com.br
+
+RESEND_API_KEY=<resend_api_key>
+MAIL_FROM="Doculoc <noreply@seudominio.com.br>"
+PASSWORD_RESET_TOKEN_EXPIRES_MINUTES=60
+
+NPM_CONFIG_PRODUCTION=false
 ```
 
-O arquivo deve conter placeholders compatíveis com `docxtemplater`.
+### Banco PostgreSQL no Render
 
-## Variáveis disponíveis
+1. Crie um serviço PostgreSQL no Render.
+2. Copie a `Internal Database URL`.
+3. Cole em `DATABASE_URL` no Web Service.
+4. Garanta que `npm run prisma:deploy` esteja no Pre-Deploy Command.
+
+### Cloudflare R2
+
+1. Crie um bucket, por exemplo `doculoc-contracts-prod`.
+2. Crie um R2 API Token com permissão de leitura e escrita no bucket.
+3. Copie `Access Key ID` e `Secret Access Key`.
+4. Copie o endpoint no formato:
 
 ```txt
-{tenantName}
-{tenantDocument}
-{tenantEmail}
-{tenantPhone}
-
-{propertyZipCode}
-{propertyStreet}
-{propertyNumber}
-{propertyComplement}
-{propertyNeighborhood}
-{propertyCity}
-{propertyState}
-
-{rentValue}
-{condominiumValue}
-{feesValue}
-{requestedExpense}
-
-{packageValue}
-{feeValue}
-{monthlyServiceFee}
-
-{realEstateName}
-{realEstateEmail}
-{realEstateCnpj}
-{realEstatePhone}
-{realEstateResponsibleName}
-
-{generatedAt}
+https://<ACCOUNT_ID>.r2.cloudflarestorage.com
 ```
 
-## Significado das principais variáveis
-
-| Variável                 | Descrição                                 |
-| ------------------------ | ----------------------------------------- |
-| `{tenantName}`           | Nome do locatário                         |
-| `{tenantDocument}`       | CPF ou CNPJ do locatário                  |
-| `{tenantEmail}`          | E-mail do locatário                       |
-| `{tenantPhone}`          | Telefone do locatário                     |
-| `{propertyZipCode}`      | CEP do imóvel                             |
-| `{propertyStreet}`       | Rua ou avenida do imóvel                  |
-| `{propertyNumber}`       | Número do imóvel                          |
-| `{propertyComplement}`   | Complemento do imóvel                     |
-| `{propertyNeighborhood}` | Bairro do imóvel                          |
-| `{propertyCity}`         | Cidade do imóvel                          |
-| `{propertyState}`        | Estado do imóvel                          |
-| `{rentValue}`            | Valor do aluguel                          |
-| `{condominiumValue}`     | Valor do condomínio                       |
-| `{feesValue}`            | Valor das taxas                           |
-| `{requestedExpense}`     | Soma do aluguel, condomínio e taxas       |
-| `{packageValue}`         | Valor total do pacote                     |
-| `{feeValue}`             | Valor da taxa preenchida pela imobiliária |
-| `{monthlyServiceFee}`    | Taxa de serviço mensal calculada          |
-| `{realEstateName}`       | Nome da imobiliária                       |
-| `{realEstateEmail}`      | E-mail da imobiliária                     |
-| `{realEstateCnpj}`       | CNPJ da imobiliária                       |
-| `{realEstatePhone}`      | Telefone da imobiliária                   |
-| `{realEstateResponsibleName}` | Nome do responsável da imobiliária   |
-| `{generatedAt}`          | Data de geração do contrato               |
+5. Configure as variáveis `S3_*` no Render.
 
 ---
 
-# Regras de decisão automática
+## Troubleshooting
 
-## Pessoa Física
+### Build falha no Render por falta de tipos TypeScript
 
-A avaliação de CPF considera, entre outros pontos:
-
-```txt
-Situação do CPF
-Biometria
-Score de crédito
-Probabilidade de inadimplência
-Dívidas
-Protestos
-Processos judiciais
-Renda presumida
-Capacidade de pagamento do pacote locatício
-```
-
-## Pessoa Jurídica
-
-A avaliação de CNPJ considera, entre outros pontos:
+Erro comum:
 
 ```txt
-Status da empresa
-Score PJ
-Probabilidade de inadimplência
-Negativações
-Dívidas
-Protestos
-Risco judicial
-Faturamento presumido
-Capacidade de pagamento do pacote locatício
+Could not find a declaration file for module 'express'
+Cannot find name 'Buffer'
+Cannot find module 'node:fs'
 ```
 
-Para PJ, a capacidade é calculada com base no faturamento presumido anual convertido em faturamento mensal estimado.
-
----
-
-# Exemplos de erros
-
-## Token ausente ou inválido
-
-```json
-{
-  "message": "Token inválido"
-}
-```
-
-Status:
+Correção:
 
 ```txt
-401
+Build Command:
+npm ci --include=dev && npm run prisma:generate && npm run build
+```
+
+E adicione no Render:
+
+```env
+NPM_CONFIG_PRODUCTION=false
 ```
 
 ---
 
-## Acesso negado
+### Arquivo DOCX baixa mas não abre
 
-```json
-{
-  "message": "Acesso negado"
-}
+Possíveis causas:
+
+1. Frontend salvou JSON como `.docx`.
+2. Backend retornou URL assinada em vez do binário do arquivo.
+3. `Content-Type` incorreto.
+4. Template `.docx` corrompido.
+
+O endpoint atual deve retornar o binário real do DOCX com:
+
+```http
+Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document
+Content-Disposition: attachment; filename="contrato-doculoc.docx"
 ```
 
-Status:
+Um `.docx` válido é internamente um arquivo ZIP. Se renomear para `.zip`, deve conter:
 
 ```txt
-403
+[Content_Types].xml
+word/document.xml
+word/_rels/document.xml.rels
 ```
 
 ---
 
-## Usuário sem créditos
+### Erro `S3 client não configurado`
 
-```json
-{
-  "message": "Usuário sem consultas disponíveis"
-}
+Verifique se:
+
+```env
+STORAGE_DRIVER=r2
+S3_ENDPOINT=...
+S3_BUCKET=...
+S3_ACCESS_KEY_ID=...
+S3_SECRET_ACCESS_KEY=...
 ```
 
-Status:
+estão definidos corretamente.
 
-```txt
-402
+---
+
+### Erro de CORS no frontend
+
+Confirme:
+
+```env
+CORS_ORIGIN=https://seu-frontend.com.br
+```
+
+Em desenvolvimento:
+
+```env
+CORS_ORIGIN=http://localhost:5173
 ```
 
 ---
 
-## Consulta não encontrada
+### Reset de senha não envia e-mail
 
-```json
-{
-  "message": "Consulta não encontrada"
-}
-```
+Confirme:
 
-Status:
-
-```txt
-404
+```env
+RESEND_API_KEY=...
+MAIL_FROM="Doculoc <noreply@seudominio.com.br>"
+APP_URL=https://seu-frontend.com.br
 ```
 
 ---
 
-## Consulta não liberada para contrato
+## Boas práticas de segurança
 
-```json
-{
-  "message": "Essa consulta ainda não está liberada para preenchimento dos dados do contrato"
-}
-```
-
-Status:
-
-```txt
-400
-```
-
----
-
-## Consulta não pronta para geração de contrato
-
-```json
-{
-  "message": "Essa consulta ainda não está pronta para geração de contrato"
-}
-```
-
-Status:
-
-```txt
-400
-```
+- Nunca versionar `.env`.
+- Não commitar `prisma/dev.db`.
+- Não commitar contratos gerados.
+- Usar bucket privado no R2.
+- Não tornar contratos públicos.
+- Usar URLs/streams autenticados pelo backend para download.
+- Usar `JWT_SECRET` forte em produção.
+- Usar `HOST=0.0.0.0` no Render.
+- Usar `CORS_ORIGIN` restrito ao domínio real do frontend.
+- Rotacionar tokens expostos acidentalmente.
+- Tratar respostas da Órago como dados sensíveis.
+- Limitar logs com CPF/CNPJ, dados financeiros e dados pessoais.
+- Implementar política de retenção para contratos e respostas brutas da Órago.
 
 ---
 
-# Checklist de testes
+## Observações de LGPD
 
-Fluxos principais:
+Este sistema trata dados pessoais e potencialmente sensíveis, incluindo:
 
-```txt
-1. Criar admin
-2. Login admin
-3. Criar imobiliária
-4. Login imobiliária
-5. Validar wallet inicial com 3 créditos
-6. Criar consulta CPF
-7. Criar consulta CNPJ
-8. Validar consumo de 1 crédito por consulta
-9. Validar consulta aprovada com status WAITING_CONTRACT_DATA
-10. Preencher dados do contrato
-11. Validar status WAITING_ADMIN_CONTRACT
-12. Admin gerar contrato
-13. Validar status CONTRACT_GENERATED
-14. Baixar contrato
-15. Criar consulta reprovada
-16. Contestar consulta
-17. Admin aprovar contestação
-18. Preencher dados do contrato após aprovação manual
-19. Gerar contrato após aprovação manual
-20. Testar alteração de créditos
-21. Testar VIP
-22. Testar permissões negadas
-```
+- CPF/CNPJ
+- Nome
+- Telefone
+- E-mail
+- Endereço do imóvel
+- Análise de crédito
+- Resposta bruta de API externa
+- Contratos de garantia locatícia
+
+Recomendações:
+
+- Armazenar apenas o necessário.
+- Controlar acesso por perfil.
+- Auditar ações administrativas.
+- Evitar logs com dados pessoais.
+- Definir prazo de retenção de documentos.
+- Garantir que contratos sejam privados.
 
 ---
 
-# Segurança e boas práticas
-
-Não versionar:
+## Checklist rápido de produção
 
 ```txt
-.env
-node_modules
-dist
-prisma/*.db
-prisma/*.db-journal
-storage/contracts/*.docx
+[ ] Banco PostgreSQL criado
+[ ] DATABASE_URL configurada
+[ ] Migrations aplicadas com prisma migrate deploy
+[ ] STORAGE_DRIVER=r2
+[ ] Bucket R2 criado
+[ ] Token R2 com leitura/escrita criado
+[ ] S3_ENDPOINT configurado
+[ ] S3_BUCKET configurado
+[ ] S3_ACCESS_KEY_ID configurado
+[ ] S3_SECRET_ACCESS_KEY configurado
+[ ] JWT_SECRET forte configurado
+[ ] ORAGO_API_TOKEN de produção configurado
+[ ] CORS_ORIGIN com domínio real
+[ ] APP_URL com domínio real do frontend
+[ ] RESEND_API_KEY configurado
+[ ] MAIL_FROM configurado
+[ ] Build passando no Render
+[ ] Geração de contrato testada
+[ ] Download de contrato testado
+[ ] Reset de senha testado
 ```
-
-Sugestão de `.gitignore`:
-
-```gitignore
-node_modules
-dist
-.env
-*.log
-
-prisma/*.db
-prisma/*.db-journal
-
-storage/contracts/*
-!storage/contracts/.gitkeep
-```
-
----
-
-# Estrutura recomendada de diretórios
-
-```txt
-src/
-  config/
-    env.ts
-
-  controllers/
-    auth.controller.ts
-    rental-application.controller.ts
-    credit.controller.ts
-    contract.controller.ts
-
-  domain/
-    roles.ts
-
-  lib/
-    prisma.ts
-
-  middlewares/
-    auth.ts
-    async-handler.ts
-    error-handler.ts
-
-  routes/
-    auth.routes.ts
-    rental-application.routes.ts
-    credit.routes.ts
-    contract.routes.ts
-    system.routes.ts
-    index.routes.ts
-
-  schemas/
-    auth.schemas.ts
-    document.schemas.ts
-    rental-application.schemas.ts
-    credit.schemas.ts
-
-  services/
-    orago-client.ts
-    rental-application.service.ts
-    credit.service.ts
-    contract.service.ts
-
-  templates/
-    default-rental-contract.docx
-
-  utils/
-    evaluate-tenant.ts
-    evaluate-pf-tenant.ts
-    evaluate-pj-tenant.ts
-    parse-number.ts
-    parse-percentage.ts
-    parse-brazilian-currency.ts
-    parse-currency-range.ts
-```
-
----
-
-# Observações finais
-
-Este backend centraliza a regra de negócio no servidor.
-
-O frontend deve apenas:
-
-```txt
-1. Enviar dados da consulta
-2. Exibir resultado da análise
-3. Permitir contestação quando reprovado
-4. Permitir preenchimento de contrato quando aprovado
-5. Permitir download do contrato quando gerado
-```
-
-A decisão de aprovação, reprovação, consumo de crédito, contestação, aprovação manual e geração do contrato devem permanecer no backend.
