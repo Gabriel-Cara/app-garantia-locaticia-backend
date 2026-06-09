@@ -6,7 +6,7 @@ export function extractApplicantName(
 
   const rawName =
     documentType === "CPF"
-      ? oragoData.identity?.name ??
+      ? (oragoData.identity?.name ?? oragoData.identify?.name) ??
         oragoData.resume?.name
       : oragoData.company?.name ??
         oragoData.company?.corporateName ??

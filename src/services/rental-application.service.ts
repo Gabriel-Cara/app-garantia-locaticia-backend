@@ -33,6 +33,18 @@ type CreateByCnpjInput = {
   feesValue: number;
 };
 
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+
+  if (typeof error === "string") return error;
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Erro desconhecido";
+  }
+}
+
 function mapDecisionStatus(status: string) {
   if (status === "approved") return "APPROVED";
   if (status === "rejected") return "REJECTED";
@@ -53,11 +65,16 @@ function getInitialWorkflowStatus(decisionStatus: string) {
 
 async function tryCollectOragoWithRetry(analysisId: string) {
   const attempts = 3;
-  const delayMs = 3600;
+  const delayMs = 3000;
+
+  let lastResponse: any = null;
+  let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       const response = await oragoClient.collectAnalysis(analysisId);
+
+      lastResponse = response;
 
       console.log("[ORAGO_COLLECT_ATTEMPT]", {
         analysisId,
@@ -66,21 +83,45 @@ async function tryCollectOragoWithRetry(analysisId: string) {
         error: response?.error,
         message: response?.message,
         status: response?.status,
+        hasData: Boolean(response?.data),
       });
 
-      if (response && !response.error && response.ready) {
+      if (response?.error === false && response?.ready === true) {
         return response;
       }
+
+      if (response?.error === true) {
+        throw new AppError(
+          502,
+          response?.message ?? "Erro retornado pela Órago ao coletar análise.",
+          "ORAGO_COLLECT_RETURNED_ERROR",
+        );
+      }
     } catch (error) {
+      lastError = error;
+
       console.error("[ORAGO_COLLECT_ERROR]", {
         analysisId,
         attempt,
-        error,
+        message: getErrorMessage(error),
       });
     }
 
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  console.log("[ORAGO_COLLECT_NOT_READY]", {
+    analysisId,
+    lastReady: lastResponse?.ready,
+    lastError: lastResponse?.error,
+    lastMessage: lastResponse?.message,
+    lastStatus: lastResponse?.status,
+    hasData: Boolean(lastResponse?.data),
+  });
 
   return null;
 }
@@ -656,9 +697,28 @@ export class RentalApplicationService {
       );
     }
 
-    const collectResponse = await tryCollectOragoWithRetry(
-      lock.oragoAnalysisId,
-    );
+    let collectResponse: any = null;
+
+    try {
+      collectResponse = await tryCollectOragoWithRetry(lock.oragoAnalysisId);
+    } catch (error) {
+      const message = getErrorMessage(error);
+
+      await prisma.oragoConsultLock.update({
+        where: {
+          id: lock.id,
+        },
+        data: {
+          status: "FAILED",
+          errorMessage: message,
+        },
+      });
+
+      return {
+        status: "FAILED",
+        message,
+      };
+    }
 
     if (!collectResponse) {
       return {
@@ -668,22 +728,41 @@ export class RentalApplicationService {
       };
     }
 
-    const result = await this.finalizeOragoConsult({
-      lockId: lock.id,
-      requesterId: lock.requesterId,
-      documentType: lock.documentType,
-      document: lock.document,
-      oragoAnalysisId: lock.oragoAnalysisId,
-      collectResponse,
-      rentValue: Number(lock.rentValue),
-      condominiumValue: Number(lock.condominiumValue),
-      feesValue: Number(lock.feesValue),
-    });
+    try {
+      const result = await this.finalizeOragoConsult({
+        lockId: lock.id,
+        requesterId: lock.requesterId,
+        documentType: lock.documentType,
+        document: lock.document,
+        oragoAnalysisId: lock.oragoAnalysisId,
+        collectResponse,
+        rentValue: Number(lock.rentValue),
+        condominiumValue: Number(lock.condominiumValue),
+        feesValue: Number(lock.feesValue),
+      });
 
-    return {
-      status: "COMPLETED",
-      ...result,
-    };
+      return {
+        status: "COMPLETED",
+        ...result,
+      };
+    } catch (error) {
+      const message = getErrorMessage(error);
+
+      await prisma.oragoConsultLock.update({
+        where: {
+          id: lock.id,
+        },
+        data: {
+          status: "FAILED",
+          errorMessage: message,
+        },
+      });
+
+      return {
+        status: "FAILED",
+        message,
+      };
+    }
   }
 
   async fillContractData(params: {

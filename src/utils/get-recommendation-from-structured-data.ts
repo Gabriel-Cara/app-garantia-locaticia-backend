@@ -9,7 +9,7 @@ export function getRecommendationFromStructuredData(oragoData: any): {
 } {
   const reasons: string[] = [];
 
-  const identity = oragoData.identity;
+  const identity = oragoData.identity ?? oragoData.identify
   const antiFraud = oragoData.anti_fraud;
   const judicial = oragoData.judicial;
   const financial = oragoData.financial;
