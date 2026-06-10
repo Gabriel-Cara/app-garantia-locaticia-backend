@@ -12,7 +12,7 @@ const envSchema = z.object({
 
   CONTRACT_TEMPLATE_PATH: z
     .string()
-    .default("src/templates/default-rental-contract.docx"),
+    .default("src/templates/default-rental-application-contract.docx"),
 
   CONTRACT_OUTPUT_DIR: z.string().default("storage/contracts"),
 

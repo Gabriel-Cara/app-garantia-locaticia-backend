@@ -2,8 +2,8 @@ import {
   TenantDecisionInput,
   TenantDecisionResult,
 } from "../schemas/consults.schemas.js";
-import { getRecommendationFromStructuredData } from "./get-recommendation-from-structured-data.js";
 import { calculateHousingExpenseFromIncome } from "./calculate-housing-expense-from-income.js";
+import { extractOragoDecision } from "./extract-orago-decision.js";
 
 export function evaluatePfTenant(
   oragoData: any,
@@ -13,32 +13,57 @@ export function evaluatePfTenant(
     input.rentValue + input.condominiumValue + input.feesValue;
 
   const housingExpense = calculateHousingExpenseFromIncome(
-    oragoData.financial?.presumed_income ?? null,
+    oragoData?.financial?.presumed_income ?? null,
   );
 
-  const recommendationResult = getRecommendationFromStructuredData(oragoData);
-  const reasons = [...recommendationResult.reasons];
+  const oragoDecision = extractOragoDecision(oragoData);
 
-  if (recommendationResult.recommendation === "not_recommended") {
+  if (oragoDecision.status === "not_recommended") {
     return {
       status: "rejected",
       recommendation: "not_recommended",
       requestedExpense,
       housingExpense,
-      reasons,
+      reasons: ["A análise oficial da Órago retornou como não recomendada."],
+      metadata: {
+        decisionSource: "ORAGO",
+        oragoDecision,
+        doculocRuleApplied: false,
+      },
+    };
+  }
+
+  if (oragoDecision.status === "unknown") {
+    return {
+      status: "manual_review",
+      recommendation: "unknown",
+      requestedExpense,
+      housingExpense,
+      reasons: [
+        "Não foi possível identificar com segurança a recomendação oficial da Órago.",
+      ],
+      metadata: {
+        decisionSource: "ORAGO_UNKNOWN",
+        oragoDecision,
+        doculocRuleApplied: false,
+      },
     };
   }
 
   if (!housingExpense.max) {
     return {
       status: "manual_review",
-      recommendation: recommendationResult.recommendation,
+      recommendation: "recommended",
       requestedExpense,
       housingExpense,
       reasons: [
-        ...reasons,
-        "Não foi possível identificar a despesa máxima com moradia",
+        "A Órago recomendou a análise, mas não foi possível identificar a despesa máxima com moradia.",
       ],
+      metadata: {
+        decisionSource: "DOCULOC_HOUSING_RULE",
+        oragoDecision,
+        doculocRuleApplied: true,
+      },
     };
   }
 
@@ -49,11 +74,19 @@ export function evaluatePfTenant(
       requestedExpense,
       housingExpense,
       reasons: [
-        ...reasons,
-        `Despesa informada de R$ ${requestedExpense.toFixed(
+        `A Órago recomendou a análise, porém a despesa informada de R$ ${requestedExpense.toFixed(
           2,
-        )} está acima do limite máximo de R$ ${housingExpense.max.toFixed(2)}`,
+        )} está acima do limite máximo de moradia de R$ ${housingExpense.max.toFixed(
+          2,
+        )}.`,
       ],
+      metadata: {
+        decisionSource: "DOCULOC_HOUSING_RULE",
+        oragoDecision,
+        doculocRuleApplied: true,
+        requestedExpense,
+        housingExpenseMax: housingExpense.max,
+      },
     };
   }
 
@@ -62,6 +95,15 @@ export function evaluatePfTenant(
     recommendation: "recommended",
     requestedExpense,
     housingExpense,
-    reasons: ["Análise recomendada e despesa dentro do limite permitido"],
+    reasons: [
+      "A Órago recomendou a análise e a despesa informada está dentro do limite permitido pela regra Doculoc.",
+    ],
+    metadata: {
+      decisionSource: "ORAGO_AND_DOCULOC_HOUSING_RULE",
+      oragoDecision,
+      doculocRuleApplied: true,
+      requestedExpense,
+      housingExpenseMax: housingExpense.max,
+    },
   };
 }

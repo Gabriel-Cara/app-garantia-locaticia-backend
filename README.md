@@ -145,7 +145,7 @@ src/
     storage.service.ts
 
   templates/
-    default-rental-contract.docx
+    default-rental-application-contract.docx
 
   types/
     express.d.ts
@@ -357,7 +357,7 @@ JWT_SECRET="troque-por-um-segredo-com-pelo-menos-24-caracteres"
 ORAGO_BASE_URL="https://sandbox.oragoapp.com.br"
 ORAGO_API_TOKEN="cole-sua-chave-sandbox-ou-producao"
 
-CONTRACT_TEMPLATE_PATH=src/templates/default-rental-contract.docx
+CONTRACT_TEMPLATE_PATH=src/templates/default-rental-application-contract.docx
 
 STORAGE_DRIVER=local
 CONTRACT_OUTPUT_DIR=storage/contracts
@@ -1067,7 +1067,7 @@ JWT_SECRET=<segredo_forte>
 ORAGO_BASE_URL=<url_producao_orago>
 ORAGO_API_TOKEN=<token_producao_orago>
 
-CONTRACT_TEMPLATE_PATH=src/templates/default-rental-contract.docx
+CONTRACT_TEMPLATE_PATH=src/templates/default-rental-application-contract.docx
 
 STORAGE_DRIVER=r2
 CONTRACT_OUTPUT_DIR=storage/contracts

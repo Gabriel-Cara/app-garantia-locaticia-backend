@@ -27,6 +27,15 @@ const realEstateProfileSelect = {
   cnpj: true,
   phone: true,
   responsibleName: true,
+
+  zipCode: true,
+  street: true,
+  number: true,
+  complement: true,
+  neighborhood: true,
+  city: true,
+  state: true,
+
   createdAt: true,
   updatedAt: true,
 } as const;
@@ -74,6 +83,14 @@ class AuthController {
                     cnpj: realEstateProfile.cnpj,
                     phone: realEstateProfile.phone,
                     responsibleName: realEstateProfile.responsibleName,
+
+                    zipCode: realEstateProfile.zipCode,
+                    street: realEstateProfile.street,
+                    number: realEstateProfile.number,
+                    complement: realEstateProfile.complement,
+                    neighborhood: realEstateProfile.neighborhood,
+                    city: realEstateProfile.city,
+                    state: realEstateProfile.state,
                   },
                 },
               }
@@ -176,8 +193,9 @@ class AuthController {
     });
 
     const successResponse = {
-      message: "Se um usuário com esse email existir, um link para resetar a senha será enviado.",
-    }
+      message:
+        "Se um usuário com esse email existir, um link para resetar a senha será enviado.",
+    };
 
     if (!user) {
       // Para evitar vazamento de informações, retornamos a mesma resposta mesmo que o usuário não exista
@@ -186,17 +204,19 @@ class AuthController {
 
     const token = randomBytes(32).toString("hex");
     const tokenHash = hashToken(token);
-    const expiresAt = new Date(Date.now() + env.PASSWORD_RESET_TOKEN_EXPIRES_MINUTES * 60 * 1000);
+    const expiresAt = new Date(
+      Date.now() + env.PASSWORD_RESET_TOKEN_EXPIRES_MINUTES * 60 * 1000,
+    );
 
-    await prisma.$transaction( async (tx) => {
+    await prisma.$transaction(async (tx) => {
       await tx.passwordResetToken.updateMany({
         where: {
           userId: user.id,
-          usedAt: null
+          usedAt: null,
         },
         data: {
-          usedAt: new Date()
-        }
+          usedAt: new Date(),
+        },
       });
 
       await tx.passwordResetToken.create({
@@ -204,7 +224,7 @@ class AuthController {
           userId: user.id,
           tokenHash,
           expiresAt,
-        }
+        },
       });
     });
 
@@ -213,7 +233,7 @@ class AuthController {
     await mailService.send({
       to: user.email,
       subject: "Redefinição de senha - Doculoc",
-      html: buildPasswordResetEmail(user.name, resetUrl)
+      html: buildPasswordResetEmail(user.name, resetUrl),
     });
 
     return response.json(successResponse);
@@ -234,13 +254,17 @@ class AuthController {
       },
     });
 
-    if (!passwordResetToken || passwordResetToken.usedAt || passwordResetToken.expiresAt < new Date()) {
+    if (
+      !passwordResetToken ||
+      passwordResetToken.usedAt ||
+      passwordResetToken.expiresAt < new Date()
+    ) {
       throw new AppError(400, "Link de recuperação inválido ou expirado");
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
 
-    await prisma.$transaction( async (tx) => {
+    await prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id: passwordResetToken.user.id },
         data: { passwordHash },

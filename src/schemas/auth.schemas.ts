@@ -12,6 +12,14 @@ export const realEstateProfileSchema = z.object({
   cnpj: optionalCnpjSchema,
   phone: z.string().min(8),
   responsibleName: z.string().min(3),
+
+  zipCode: z.string().optional(),
+  street: z.string().optional(),
+  number: z.string().optional(),
+  complement: z.string().optional(),
+  neighborhood: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
 });
 
 export const registerSchema = z.object({

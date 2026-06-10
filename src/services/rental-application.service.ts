@@ -828,7 +828,7 @@ export class RentalApplicationService {
       create: {
         applicationId: params.applicationId,
         status: "PENDING",
-        templateName: "default-rental-contract.docx",
+        templateName: "default-rental-application-contract.docx",
       },
       update: {
         status: "PENDING",

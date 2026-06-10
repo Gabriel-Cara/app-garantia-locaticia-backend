@@ -113,6 +113,24 @@ export class ContractService {
     const realEstateProfile = application.requester.realEstateProfile;
 
     try {
+      const realEstateAddressLine = [
+        realEstateProfile?.street,
+        realEstateProfile?.number ? `nº ${realEstateProfile.number}` : null,
+        realEstateProfile?.complement,
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+      const realEstateCityLine = [
+        realEstateProfile?.neighborhood
+          ? `bairro ${realEstateProfile.neighborhood}`
+          : null,
+        realEstateProfile?.city,
+        realEstateProfile?.state,
+      ]
+        .filter(Boolean)
+        .join(", ");
+
       doc.render({
         tenantName: application.tenantName,
         tenantDocument: application.tenantDocument,
@@ -140,6 +158,16 @@ export class ContractService {
         realEstatePhone: realEstateProfile?.phone ?? "",
         realEstateResponsibleName:
           realEstateProfile?.responsibleName ?? application.requester.name,
+        realEstateZipCode: realEstateProfile?.zipCode ?? "",
+        realEstateStreet: realEstateProfile?.street ?? "",
+        realEstateNumber: realEstateProfile?.number ?? "",
+        realEstateComplement: realEstateProfile?.complement ?? "",
+        realEstateNeighborhood: realEstateProfile?.neighborhood ?? "",
+        realEstateCity: realEstateProfile?.city ?? "",
+        realEstateState: realEstateProfile?.state ?? "",
+
+        realEstateAddressLine,
+        realEstateCityLine,
 
         generatedAt: new Intl.DateTimeFormat("pt-BR").format(new Date()),
       });

@@ -8,7 +8,9 @@ export function extractApplicantName(
     documentType === "CPF"
       ? (oragoData.identity?.name ?? oragoData.identify?.name) ??
         oragoData.resume?.name
-      : oragoData.company?.name ??
+      : oragoData.company?.companyName ??
+        oragoData.company?.companyFantasyName ??
+        oragoData.company?.name ??
         oragoData.company?.corporateName ??
         oragoData.company?.corporate_name ??
         oragoData.company?.socialName ??
